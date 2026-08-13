@@ -12,9 +12,15 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 
 # -----------------------------------------------------------------------------
-# 🔒 ACESSO RESTRITO E CONFIGURAÇÃO DA PÁGINA
+# 👥 CADASTRO DE ADMINISTRADORES E CONFIGURAÇÃO DE SENHA
 # -----------------------------------------------------------------------------
-SENHA_ACESSO = "Bks2026@"
+SENHA_GERAL = "Bks2026@"
+
+ADMINISTRADORES = {
+    "flavia.godoi@bks.com.br": {"nome": "Flávia Godoi"},
+    "neto.duarte@bks.com.br": {"nome": "Neto Duarte"},
+    "thaina.oliveira@bks.com.br": {"nome": "Thainá de Oliveira"}
+}
 
 st.set_page_config(
     page_title="PLD/FTP - BKS Compliance", 
@@ -23,30 +29,18 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# ESTILIZAÇÃO CSS CUSTOMIZADA PARA DEIXAR A INTERFACE MODERNA
+# ESTILIZAÇÃO CSS CUSTOMIZADA
 st.markdown("""
     <style>
-    /* Estilo do fundo e fontes */
     .main {
         background-color: #f8f9fa;
     }
-    /* Estilo dos Títulos */
     h1 {
         color: #0056b3;
         font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
         font-weight: 700;
         margin-bottom: 0px;
     }
-    /* Estilo dos Cards de Entrada */
-    .css-card {
-        background-color: #ffffff;
-        border-radius: 10px;
-        padding: 25px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.05);
-        border: 1px solid #e1e4e8;
-        margin-bottom: 25px;
-    }
-    /* Botão Principal em Azul BKS */
     div.stButton > button:first-child {
         background-color: #0056b3;
         color: white;
@@ -60,14 +54,24 @@ st.markdown("""
         background-color: #003366;
         box-shadow: 0 4px 8px rgba(0,0,0,0.15);
     }
+    /* Estilo para links de consulta externa */
+    .link-card {
+        background-color: #ffffff;
+        border: 1px solid #d0d7de;
+        border-radius: 8px;
+        padding: 12px;
+        margin-top: 10px;
+    }
     </style>
 """, unsafe_allow_html=True)
 
 if "autenticado" not in st.session_state:
     st.session_state.autenticado = False
+if "usuario_logado" not in st.session_state:
+    st.session_state.usuario_logado = None
 
 # -----------------------------------------------------------------------------
-# 🔑 TELA DE LOGIN ESTILIZADA
+# 🔑 TELA DE LOGIN FLEXÍVEL
 # -----------------------------------------------------------------------------
 if not st.session_state.autenticado:
     col_l1, col_l2, col_l3 = st.columns([1, 2, 1])
@@ -78,18 +82,33 @@ if not st.session_state.autenticado:
         st.caption("Sistema de Conformidade e Prevenção à Lavagem de Dinheiro")
         st.markdown("---")
         
-        senha_digitada = st.text_input("🔑 Digite a Senha de Acesso:", type="password")
+        email_digitado = st.text_input("📧 E-mail de Usuário:", placeholder="seu.nome@bks.com.br").strip().lower()
+        senha_digitada = st.text_input("🔑 Senha de Acesso:", type="password")
+        
         if st.button("🔓 Entrar no Sistema", use_container_width=True):
-            if senha_digitada == SENHA_ACESSO:
+            if senha_digitada == SENHA_GERAL:
+                if not email_digitado:
+                    email_digitado = "operacao@bks.com.br"
+                
+                if email_digitado in ADMINISTRADORES:
+                    dados_user = ADMINISTRADORES[email_digitado]
+                else:
+                    nome_formatado = email_digitado.split("@")[0].replace(".", " ").title()
+                    dados_user = {"nome": nome_formatado}
+                
                 st.session_state.autenticado = True
+                st.session_state.usuario_logado = dados_user
+                st.session_state.email_logado = email_digitado
                 st.rerun()
             else:
-                st.error("❌ Senha incorreta! Acesso negado.")
+                st.error("❌ Senha incorreta! Verifique seus dados de acesso.")
     st.stop()
 
 # -----------------------------------------------------------------------------
-# 🛡️ BARRA LATERAL (SIDEBAR) COM PROFILE E CONTROLES
+# 🛡️ BARRA LATERAL (SIDEBAR)
 # -----------------------------------------------------------------------------
+user_info = st.session_state.usuario_logado
+
 with st.sidebar:
     if os.path.exists("logo_bks.png"):
         st.image("logo_bks.png", use_container_width=True)
@@ -99,12 +118,21 @@ with st.sidebar:
     st.markdown("### 🟢 Status: **Operacional**")
     st.caption("BKS Corretora & BKS Re Resseguros")
     st.markdown("---")
-    st.markdown("👤 **Usuário:** flavia.godoi@bks.com.br")
-    st.markdown("🔐 **Perfil:** Administrador Compliance")
+    st.markdown(f"👤 **Nome:** {user_info['nome']}")
+    st.markdown(f"📧 **E-mail:** {st.session_state.email_logado}")
+    st.markdown("---")
+    
+    # CAIXA DE CONSULTAS EXTERNAS (RECEITA FEDERAL)
+    st.markdown("### 🏛️ Consultas Receita Federal")
+    st.link_button("📄 Consulta CPF (Receita)", "https://servicos.receita.fazenda.gov.br/Servicos/CPF/ConsultaSituacao/ConsultaPublica.asp", use_container_width=True)
+    st.link_button("🏢 Consulta CNPJ (Receita)", "https://solucoes.receita.fazenda.gov.br/Servicos/cnpjreva/cnpjreva_solicitacao.asp", use_container_width=True)
+    
     st.markdown("---")
     
     if st.button("🔒 Sair do Sistema", use_container_width=True):
         st.session_state.autenticado = False
+        st.session_state.usuario_logado = None
+        st.session_state.email_logado = None
         st.rerun()
 
 # -----------------------------------------------------------------------------
@@ -114,7 +142,6 @@ st.title("🛡️ Painel Oficial de Consulta PLD/FTP")
 st.caption("Pesquisa automatizada em portais de transparência e bases públicas para enquadramento regulatório.")
 st.markdown("<br>", unsafe_allow_html=True)
 
-# CARD DO FORMULÁRIO DE CONSULTA
 with st.container():
     st.markdown("### 📋 Dados do Pesquisado")
     
@@ -136,7 +163,6 @@ if btn_pesquisar:
     else:
         with st.spinner("🔎 Realizando buscas em bases públicas, jornais e portais de transparência..."):
             
-            # 1. MOTOR DE BUSCA MULTI-QUERY
             nome_limpo = nome_input.strip()
             partes_nome = nome_limpo.split()
             primeiro_ultimo = f"{partes_nome[0]} {partes_nome[-1]}" if len(partes_nome) > 1 else nome_limpo
@@ -157,7 +183,6 @@ if btn_pesquisar:
             except Exception:
                 res_web = "Busca concluída."
 
-            # 2. ENQUADRAMENTO DE DADOS
             texto_l = res_web.lower() + " " + nome_limpo.lower()
             
             termos_pep = [
@@ -294,8 +319,9 @@ if btn_pesquisar:
             story.append(Paragraph("RELATÓRIO DE CONSULTA E CONFORMIDADE (PLD/FTP)", style_title))
             story.append(Spacer(1, 10))
 
+            emissor_nome = f"Operador: {user_info['nome']} ({st.session_state.email_logado})"
             meta_table_data = [
-                [Paragraph("Emissor: Gemini AI Regulatory Assistant", style_meta_val)],
+                [Paragraph(f"Emissor: {emissor_nome}", style_meta_val)],
                 [Paragraph("Status: CONCLUÍDO &nbsp;|&nbsp; Classificação: CONFIDENCIAL", style_meta_val)]
             ]
             
