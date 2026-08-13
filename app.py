@@ -1,5 +1,5 @@
 import streamlit as st
-import io, os
+import io, os, re, unicodedata, requests
 from datetime import datetime, timezone, timedelta
 from PIL import Image as PILImage
 from ddgs import DDGS
@@ -10,6 +10,38 @@ from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
+
+# -----------------------------------------------------------------------------
+# 🛠️ FUNÇÕES AUXILIARES DE NORMALIZAÇÃO E BUSCA DIVERSFICADA
+# -----------------------------------------------------------------------------
+def normalizar_texto(txt):
+    """Remove acentos, caracteres especiais e converte para caixa baixa."""
+    if not txt:
+        return ""
+    nfkd = unicodedata.normalize('NFD', txt)
+    sem_acento = "".join([c for c in nfkd if not unicodedata.combining(c)])
+    return re.sub(r'[^a-zA-Z0-9\s]', ' ', sem_acento).lower().strip()
+
+def buscar_wikipedia(nome):
+    """Busca resumo da autoridade na Wikipédia em Português."""
+    try:
+        url = "https://pt.wikipedia.org/w/api.php"
+        params = {
+            "action": "query",
+            "format": "json",
+            "prop": "extracts",
+            "exintro": True,
+            "explaintext": True,
+            "titles": nome
+        }
+        res = requests.get(url, params=params, timeout=4).json()
+        pages = res.get("query", {}).get("pages", {})
+        for page_id, page_data in pages.items():
+            if page_id != "-1":
+                return page_data.get("extract", "")
+    except Exception:
+        pass
+    return ""
 
 # -----------------------------------------------------------------------------
 # 👥 CADASTRO DE ADMINISTRADORES E CONFIGURAÇÃO DE SENHA
@@ -54,7 +86,6 @@ st.markdown("""
         background-color: #003366;
         box-shadow: 0 4px 8px rgba(0,0,0,0.15);
     }
-    /* Estilo para links de consulta externa */
     .link-card {
         background-color: #ffffff;
         border: 1px solid #d0d7de;
@@ -122,7 +153,6 @@ with st.sidebar:
     st.markdown(f"📧 **E-mail:** {st.session_state.email_logado}")
     st.markdown("---")
     
-    # CAIXA DE CONSULTAS EXTERNAS (RECEITA FEDERAL)
     st.markdown("### 🏛️ Consultas Receita Federal")
     st.link_button("📄 Consulta CPF (Receita)", "https://servicos.receita.fazenda.gov.br/Servicos/CPF/ConsultaSituacao/ConsultaPublica.asp", use_container_width=True)
     st.link_button("🏢 Consulta CNPJ (Receita)", "https://solucoes.receita.fazenda.gov.br/Servicos/cnpjreva/cnpjreva_solicitacao.asp", use_container_width=True)
@@ -151,6 +181,9 @@ with st.container():
     with col2:
         cpf_input = st.text_input("👉 CPF do Pesquisado", placeholder="Ex: 000.000.000-00")
     
+    # OPÇÃO DE CONFIRMAÇÃO MANUAL SE O OPERADOR JÁ SOUBER QUE É PEP
+    force_pep = st.checkbox("⚠️ Enquadrar manualmente como PEP (caso a consulta automática precise de confirmação)", value=False)
+
     st.markdown("<br>", unsafe_allow_html=True)
     btn_pesquisar = st.button("🔎 Iniciar Consulta e Gerar Relatório PDF", type="primary", use_container_width=True)
 
@@ -161,56 +194,79 @@ if btn_pesquisar:
     if not nome_input.strip() or not cpf_input.strip():
         st.warning("⚠️ Por favor, preencha o Nome e o CPF antes de continuar.")
     else:
-        with st.spinner("🔎 Realizando buscas em bases públicas, jornais e portais de transparência..."):
+        with st.spinner("🔎 Consultando Wikipédia, portais de transparência e jornais..."):
             
             nome_limpo = nome_input.strip()
-            partes_nome = nome_limpo.split()
-            primeiro_ultimo = f"{partes_nome[0]} {partes_nome[-1]}" if len(partes_nome) > 1 else nome_limpo
             
-            queries = [
-                f'"{nome_limpo}" político OR "vice-prefeito" OR prefeito OR deputado OR senador OR ministro OR juiz',
-                f'"{primeiro_ultimo}" "vice-prefeito" OR prefeito OR político OR eleição OR ceará OR fortaleza',
-                f'"{nome_limpo}" "PLD" OR "PEP" OR "exposição pública" OR empresário'
+            # 1. BUSCA WIKIPÉDIA
+            wiki_text = buscar_wikipedia(nome_limpo)
+            
+            # 2. BUSCA DUCKDUCKGO COM QUERIES SIMPLES (Evita falhas de sintaxe)
+            res_web = wiki_text + "\n"
+            queries_simples = [
+                f'"{nome_limpo}"',
+                f'{nome_limpo} politico cargo governo',
+                f'{nome_limpo} ministro juiz deputado prefeito senador'
             ]
             
-            res_web = ""
             try:
                 with DDGS() as ddgs:
-                    for q in queries:
-                        results = [r for r in ddgs.text(q, max_results=5)]
+                    for q in queries_simples:
+                        results = list(ddgs.text(q, max_results=3))
                         for r in results:
                             res_web += f"{r.get('title', '')} {r.get('body', '')}\n"
             except Exception:
-                res_web = "Busca concluída."
+                pass
 
-            texto_l = res_web.lower() + " " + nome_limpo.lower()
+            # NORMALIZAÇÃO DO TEXTO CONSOLIDADO
+            texto_l = normalizar_texto(res_web)
             
-            termos_pep = [
-                "vice-prefeito", "prefeito", "ministro", "stf", "deputado", 
-                "senador", "governador", "juiz", "desembargador", "secretário", 
-                "vereador", "candidato", "eleição", "partido", "politico", "político",
-                "gaudêncio", "gaudencio", "lucena"
-            ]
+            # 3. DICIONÁRIO COMPLETO DE CARGOS PEP (Normativa COAF / SUSEP 612/2020)
+            TERMOS_JUDICIARIO = ["ministro", "stf", "stj", "tst", "tse", "stm", "desembargador", "juiz", "magistrado", "cjd"]
+            TERMOS_EXECUTIVO = ["presidente", "vice presidente", "governador", "vice governador", "prefeito", "vice prefeito", "secretario", "ministro de estado"]
+            TERMOS_LEGISLATIVO = ["senador", "deputado federal", "deputado estadual", "deputado distrital", "vereador", "camara dos deputados", "senado federal"]
+            TERMOS_CONTROLE_PROCURADORIA = ["procurador", "promotor", "tcu", "tce", "tcm", "tribunal de contas", "defensor publico", "pgr"]
+            TERMOS_MILITAR_DIPLOMACIA = ["general", "almirante", "brigadeiro", "embaixador", "diplomata"]
+            TERMOS_ESTATAIS = ["diretor estatal", "presidente estatal", "petrobras", "bndes", "caixa economica", "banco do brasil"]
+            TERMOS_GERAIS_POLITICA = ["politico", "partido", "eleicao", "candidato", "mandato", "ex prefeito", "ex ministro", "ex governador", "pep"]
+
+            TODOS_TERMOS_PEP = (
+                TERMOS_JUDICIARIO + TERMOS_EXECUTIVO + TERMOS_LEGISLATIVO + 
+                TERMOS_CONTROLE_PROCURADORIA + TERMOS_MILITAR_DIPLOMACIA + 
+                TERMOS_ESTATAIS + TERMOS_GERAIS_POLITICA
+            )
             
-            detec_pep = any(term in texto_l for term in termos_pep)
+            # Checagem se algum termo PEP foi encontrado
+            termo_encontrado = None
+            for term in TODOS_TERMOS_PEP:
+                if term in texto_l:
+                    termo_encontrado = term
+                    break
             
+            detec_pep = (termo_encontrado is not None) or force_pep
+            
+            # ENQUADRAMENTO DO CARGO
             if detec_pep:
-                if "vice-prefeito" in texto_l or "prefeito" in texto_l or "lucena" in texto_l or "gaudêncio" in texto_l:
-                    cargo_detectado = "Ex-Vice-Prefeito / Gestor Político"
-                    orgao_detectado = "Poder Executivo Municipal / Mandato Eletivo"
-                    detalhe_cargo = "Agente Político / Notória Exposição Pública"
-                elif "ministro" in texto_l or "stf" in texto_l:
-                    cargo_detectado = "Ministro / Magistrado"
-                    orgao_detectado = "Poder Judiciário / Corte Superior"
-                    detalhe_cargo = "Cargo de Alta Relevância Pública"
-                elif "deputado" in texto_l or "senador" in texto_l:
-                    cargo_detectado = "Parlamentar (Senador/Deputado)"
+                if any(t in texto_l for t in TERMOS_JUDICIARIO):
+                    cargo_detectado = "Ministro / Magistrado de Corte Superior ou Tribunal"
+                    orgao_detectado = "Poder Judiciário"
+                    detalhe_cargo = "Membro do Poder Judiciário / Notória Exposição Pública (PEP)"
+                elif any(t in texto_l for t in TERMOS_EXECUTIVO):
+                    cargo_detectado = "Agente Político do Executivo (Presidente / Governador / Prefeito / Secretário)"
+                    orgao_detectado = "Poder Executivo"
+                    detalhe_cargo = "Gestor Político / Notória Exposição Pública"
+                elif any(t in texto_l for t in TERMOS_LEGISLATIVO):
+                    cargo_detectado = "Parlamentar (Senador / Deputado / Vereador)"
                     orgao_detectado = "Poder Legislativo"
                     detalhe_cargo = "Agente Político Eletivo"
+                elif any(t in texto_l for t in TERMOS_CONTROLE_PROCURADORIA):
+                    cargo_detectado = "Procurador / Conselheiro de Tribunal de Contas / Órgão de Controle"
+                    orgao_detectado = "Ministério Público / Tribunal de Contas"
+                    detalhe_cargo = "Agente de Fiscalização e Controle"
                 else:
-                    cargo_detectado = "Agente Político / Exposição Pública"
-                    orgao_detectado = "Administração Pública / Órgãos Eletivos"
-                    detalhe_cargo = "Histórico ou Vínculo Político Identificado"
+                    cargo_detectado = "Agente Político / Exposição Pública Identificada"
+                    orgao_detectado = "Administração Pública / Órgão Governamental"
+                    detalhe_cargo = "Histórico de Atuação Pública / PEP Enquadrado"
 
                 STATUS_PEP = "SIM"
                 PEP_VINCULO = "NÃO CONSTA"
@@ -220,9 +276,9 @@ if btn_pesquisar:
                 RISCO_FINAL = "ALTO RISCO"
                 PRAZO_RENOVAÇÃO = "06 MESES"
                 SITUACAO_CPF = "REGULAR"
-                APONTAMENTOS = "RESTRIÇÃO: Exposição ativa ou histórico em função pública / PEP"
-                PERFIL_OP = "Agente Político / Exposição Pública"
-                PARECER = f"Identificado histórico/atuação pública como {cargo_detectado}. Exige governança reforçada e monitoramento contínuo segundo diretrizes de PLD/FTP."
+                APONTAMENTOS = "RESTRIÇÃO: Exposição ativa ou histórico em alta função pública / PEP"
+                PERFIL_OP = "Pessoa Politicamente Exposta (PEP)"
+                PARECER = f"Identificado enquadramento regulatório de PEP ({cargo_detectado}). Exige governança reforçada e monitoramento contínuo segundo diretrizes de PLD/FTP."
                 PROXIMA_ATUALIZACAO = "13/02/2027"
             else:
                 STATUS_PEP = "NÃO"
@@ -238,7 +294,18 @@ if btn_pesquisar:
                 PARECER = "Consulta realizada em bases públicas de transparência. Não foram identificados cargos políticos ativos nem restrições registradas."
                 PROXIMA_ATUALIZACAO = "13/08/2027"
 
+            # -----------------------------------------------------------------
+            # EXIBIÇÃO DE EVIDÊNCIAS NA TELA ANTES DO PDF
+            # -----------------------------------------------------------------
+            st.markdown("---")
+            if STATUS_PEP == "SIM":
+                st.error(f"🔴 **RESULTADO: PESSOA POLITICAMENTE EXPOSTA (PEP)** | Cargo: {CARGOS_EXERCIDOS}")
+            else:
+                st.success("🟢 **RESULTADO: NADA CONSTA (NÃO É PEP)**")
+
+            # -----------------------------------------------------------------
             # 3. CONSTRUÇÃO DO PDF VETORIAL COM REPORTLAB
+            # -----------------------------------------------------------------
             buffer = io.BytesIO()
             doc = SimpleDocTemplate(
                 buffer,
@@ -262,7 +329,6 @@ if btn_pesquisar:
             style_alert_gerencia = ParagraphStyle('AlertGerencia', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=8, leading=11, alignment=TA_CENTER, textColor=colors.HexColor('#dc3545'))
             style_disclaimer = ParagraphStyle('Disclaimer', parent=styles['Normal'], fontName='Helvetica-Oblique', fontSize=7, leading=9, alignment=TA_CENTER, textColor=colors.HexColor('#555555'))
             style_date = ParagraphStyle('DateEmis', parent=styles['Normal'], fontName='Helvetica-Oblique', fontSize=7, leading=9, alignment=TA_RIGHT, textColor=colors.HexColor('#444444'))
-            style_footer = ParagraphStyle('Footer', parent=styles['Normal'], fontName='Helvetica', fontSize=7, leading=9, alignment=TA_CENTER, textColor=colors.HexColor('#777777'))
 
             def format_val(key, text):
                 u = text.strip().upper()
@@ -421,7 +487,7 @@ if btn_pesquisar:
 
             make_sec("6. RENOVAÇÃO DE RELATÓRIO", [
                 ("PRAZO EXIGIDO PARA REVISÃO", PRAZO_RENOVAÇÃO, "PRAZO_RENOVAÇÃO"),
-                ("PRÓXIMA ATUALIZAÇÃO RECOMENDADA", PROXIMA_ATUALIZACAO)
+                ("PRÓXIMA ATUALIZACAO RECOMENDADA", PROXIMA_ATUALIZACAO)
             ])
 
             story.append(Spacer(1, 16))
@@ -444,9 +510,6 @@ if btn_pesquisar:
             doc.build(story, onFirstPage=add_footer, onLaterPages=add_footer)
             pdf_bytes = buffer.getvalue()
 
-            st.markdown("---")
-            st.success("✅ Relatório de Conformidade Gerado com Sucesso!")
-            
             st.download_button(
                 label="📥 Baixar Relatório PDF Oficial (BKS / BKS Re)",
                 data=pdf_bytes,
