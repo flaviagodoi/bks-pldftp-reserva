@@ -12,7 +12,7 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 
 # -----------------------------------------------------------------------------
-# 🛠️ FUNÇÕES AUXILIARES DE NORMALIZAÇÃO E BUSCA LOCAL
+# 🛠️ FUNÇÕES AUXILIARES DE NORMALIZAÇÃO, VALIDAÇÃO DE CPF E BUSCA LOCAL
 # -----------------------------------------------------------------------------
 def normalizar_texto(txt):
     """Remove acentos, caracteres especiais e converte para caixa baixa e espaços simples."""
@@ -22,6 +22,29 @@ def normalizar_texto(txt):
     sem_acento = "".join([c for c in nfkd if not unicodedata.combining(c)])
     limpo = re.sub(r'[^a-zA-Z0-9\s]', ' ', sem_acento).lower()
     return " ".join(limpo.split())
+
+def validar_cpf(cpf: str) -> bool:
+    """Valida o cálculo dos dígitos verificadores do CPF (Módulo 11)."""
+    cpf_limpo = re.sub(r'\D', '', str(cpf))
+    
+    if len(cpf_limpo) != 11 or cpf_limpo == cpf_limpo[0] * 11:
+        return False
+    
+    # Primeiro dígito verificador
+    soma = sum(int(cpf_limpo[i]) * (10 - i) for i in range(9))
+    resto = (soma * 10) % 11
+    digito_1 = 0 if resto == 10 else resto
+    if digito_1 != int(cpf_limpo[9]):
+        return False
+        
+    # Segundo dígito verificador
+    soma = sum(int(cpf_limpo[i]) * (11 - i) for i in range(10))
+    resto = (soma * 10) % 11
+    digito_2 = 0 if resto == 10 else resto
+    if digito_2 != int(cpf_limpo[10]):
+        return False
+        
+    return True
 
 def identificar_arquivo_pep():
     """Localiza o arquivo da planilha de PEPs no diretório."""
@@ -120,7 +143,6 @@ def analisar_proximidade_cargo(texto_bruto, nome_pesquisado):
     if nome_norm not in texto_norm:
         return None
 
-    # Lista de cargos e termos PEP específicos
     cargos_pep = [
         "deputado federal", "deputado estadual", "senador", "governador", "prefeito",
         "ministro de estado", "ministro do stf", "ministro do stj", "ministro do tcu",
@@ -129,11 +151,9 @@ def analisar_proximidade_cargo(texto_bruto, nome_pesquisado):
         "ex governador", "ex ministro"
     ]
 
-    # Encontra todas as ocorrências do nome no texto
     indices_nome = [m.start() for m in re.finditer(re.escape(nome_norm), texto_norm)]
 
     for idx in indices_nome:
-        # Pega a janela de texto em volta do nome (60 caracteres antes e 60 depois)
         inicio_janela = max(0, idx - 60)
         fim_janela = min(len(texto_norm), idx + len(nome_norm) + 60)
         trecho = texto_norm[inicio_janela:fim_janela]
@@ -213,19 +233,19 @@ with st.sidebar:
     st.markdown(f"📧 **E-mail:** {st.session_state.email_logado}")
     st.markdown("---")
     
-    # STATUS DA PLANILHA OFICIAL LOCAL COM CHECAGEM DE VALIDADE (30 DIAS)
+    # STATUS DA PLANILHA OFICIAL LOCAL COM FIXAÇÃO DA DATA (14/08/2026) E CONTADOR DE 30 DIAS
     arquivo_encontrado = identificar_arquivo_pep()
     if arquivo_encontrado:
-        tempo_modificacao = os.path.getmtime(arquivo_encontrado)
-        data_arquivo = datetime.fromtimestamp(tempo_modificacao)
+        # Data fixa de inclusão da base: Sexta-feira, 14/08/2026
+        data_arquivo = datetime(2026, 8, 14)
         dias_desde_atualizacao = (datetime.now() - data_arquivo).days
 
         if dias_desde_atualizacao > 30:
-            st.warning(f"⚠️ **Base PEP Local:** Atualização Necessária!\n(Arquivo de {data_arquivo.strftime('%d/%m/%Y')} - há {dias_desde_atualizacao} dias)")
+            st.warning(f"⚠️ **Base PEP Local:** Atualização Necessária!\n(Inclusão de {data_arquivo.strftime('%d/%m/%Y')} - há {dias_desde_atualizacao} dias)")
             st.caption("💡 *Recomendado baixar a nova base no Portal da Transparência (CGU) e atualizar no GitHub.*")
         else:
             st.success("📁 **Base PEP Local:** Carregada e Ativa")
-            st.caption(f"🗓️ *Última atualização: {data_arquivo.strftime('%d/%m/%Y')}*")
+            st.caption(f"🗓️ *Inclusão da base: {data_arquivo.strftime('%d/%m/%Y')}*")
     else:
         st.info("🌐 **Base PEP Local:** Não enc. (Modo Web Ativo)")
 
@@ -262,9 +282,12 @@ with st.container():
 # ⚙️ EXECUÇÃO DA CONSULTA DUPLA
 # -----------------------------------------------------------------------------
 if btn_pesquisar:
-    cpf_limpo_num = re.sub(r'\D', '', cpf_input)
-    if not nome_input.strip() or len(cpf_limpo_num) != 11:
-        st.warning("⚠️ Por favor, preencha o Nome Completo e um CPF válido com 11 dígitos antes de continuar.")
+    cpf_valido_bool = validar_cpf(cpf_input)
+    
+    if not nome_input.strip():
+        st.warning("⚠️ Por favor, preencha o Nome Completo antes de continuar.")
+    elif not cpf_valido_bool:
+        st.error("❌ **CPF Inválido:** O CPF informado possui erro nos dígitos verificadores ou formato incorreto. Corrija o número para prosseguir.")
     else:
         with st.spinner("🔎 Consultando base oficial e realizando varredura web de governança..."):
             
@@ -321,6 +344,8 @@ if btn_pesquisar:
             # -----------------------------------------------------------------
             # ATRIBUIÇÃO DOS RESULTADOS FINAIS
             # -----------------------------------------------------------------
+            SITUACAO_CPF = "VÁLIDO"
+
             if detec_pep:
                 STATUS_PEP = "SIM"
                 PEP_VINCULO = "NÃO CONSTA"
@@ -329,7 +354,6 @@ if btn_pesquisar:
                 DETALHE_EXPOSICAO = detalhe_cargo
                 RISCO_FINAL = "ALTO RISCO"
                 PRAZO_RENOVAÇÃO = "06 MESES"
-                SITUACAO_CPF = "REGULAR"
                 APONTAMENTOS = f"RESTRIÇÃO: Exposição ativa ou histórico em alta função pública / PEP ({origem_identificacao})"
                 PERFIL_OP = "Pessoa Politicamente Exposta (PEP)"
                 PARECER = f"Identificado enquadramento regulatório de PEP ({cargo_detectado}). Exige governança reforçada e monitoramento contínuo segundo diretrizes de PLD/FTP."
@@ -342,7 +366,6 @@ if btn_pesquisar:
                 DETALHE_EXPOSICAO = "Sem histórico de exposição pública registrado"
                 RISCO_FINAL = "BAIXO"
                 PRAZO_RENOVAÇÃO = "01 ANO"
-                SITUACAO_CPF = "REGULAR"
                 APONTAMENTOS = "SEM RESTRIÇÕES: Nada consta na base oficial da CGU nem nos portais de transparência"
                 PERFIL_OP = "Profissional Independente"
                 PARECER = "Consulta realizada na base oficial de transparência da CGU e portais públicos. Não foram identificados cargos políticos ativos nem histórico de exposição pública para o Nome e CPF informados."
