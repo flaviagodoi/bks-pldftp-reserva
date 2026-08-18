@@ -62,9 +62,9 @@ def identificar_arquivo_pep():
 
 def buscar_na_planilha_pep(nome_input, cpf_input):
     """
-    Busca na planilha oficial da CGU com rigor anti-homônimo:
-    - Nome Completo deve ser idêntico.
-    - Miolo do CPF (6 dígitos centrais) deve bater.
+    Busca na planilha oficial da CGU com regra adaptativa anti-mascaramento:
+    - Se o Nome Completo for idêntico e o CPF da base for válido, valida o miolo.
+    - Se o CPF na base estiver parcialmente mascarado ou ausente, considera pelo Nome Completo Exato.
     """
     caminho_final = identificar_arquivo_pep()
     if not caminho_final:
@@ -88,24 +88,23 @@ def buscar_na_planilha_pep(nome_input, cpf_input):
                 nome_pep_row = row.get('Nome_PEP') or row.get('NOME_PEP') or row.get('Nome') or row.get('NOME') or ""
                 nome_pep_norm = normalizar_texto(nome_pep_row)
 
-                if nome_norm != nome_pep_norm:
-                    continue
+                if nome_norm == nome_pep_norm:
+                    cpf_row = row.get('CPF') or row.get('Cpf') or row.get('CPF_PEP') or ""
+                    cpf_row_numeros = re.sub(r'\D', '', cpf_row)
 
-                cpf_row = row.get('CPF') or row.get('Cpf') or row.get('CPF_PEP') or ""
-                cpf_row_numeros = re.sub(r'\D', '', cpf_row)
+                    # Se a base tiver CPF completo de 11 dígitos, valida o miolo para evitar homônimos
+                    if miolo_cpf and cpf_row_numeros and len(cpf_row_numeros) == 11:
+                        if miolo_cpf != cpf_row_numeros[3:9]:
+                            continue
 
-                if miolo_cpf and cpf_row_numeros:
-                    if miolo_cpf != cpf_row_numeros:
-                        continue
+                    cargo = row.get('Descrição_Função') or row.get('DESCRICAO_FUNCAO') or row.get('Função') or row.get('Cargo') or "Agente Político / Função Pública"
+                    orgao = row.get('Nome_Órgão') or row.get('NOME_ORGAO') or row.get('Órgão') or row.get('Orgao') or "Administração Pública (CGU)"
 
-                cargo = row.get('Descrição_Função') or row.get('DESCRICAO_FUNCAO') or row.get('Função') or row.get('Cargo') or "Agente Político / Função Pública"
-                orgao = row.get('Nome_Órgão') or row.get('NOME_ORGAO') or row.get('Órgão') or row.get('Orgao') or "Administração Pública (CGU)"
-
-                return {
-                    "cargo": cargo.strip(),
-                    "orgao": orgao.strip(),
-                    "detalhe": f"Registro Oficial na Base da CGU ({caminho_final})"
-                }
+                    return {
+                        "cargo": cargo.strip(),
+                        "orgao": orgao.strip(),
+                        "detalhe": f"Registro Oficial na Base da CGU ({caminho_final})"
+                    }
     except Exception:
         pass
 
@@ -134,8 +133,8 @@ def buscar_wikipedia(nome):
 
 def analisar_proximidade_cargo(texto_bruto, nome_pesquisado):
     """
-    Analisa se o nome pesquisado aparece diretamente vinculado a um cargo
-    público relevante no mesmo parágrafo / contexto de até 60 caracteres.
+    Analisa se o nome pesquisado aparece vinculado a um cargo
+    público relevante no mesmo contexto de até 250 caracteres.
     """
     texto_norm = normalizar_texto(texto_bruto)
     nome_norm = normalizar_texto(nome_pesquisado)
@@ -143,19 +142,21 @@ def analisar_proximidade_cargo(texto_bruto, nome_pesquisado):
     if nome_norm not in texto_norm:
         return None
 
+    # Termos de enquadramento ampliados
     cargos_pep = [
-        "deputado federal", "deputado estadual", "senador", "governador", "prefeito",
-        "ministro de estado", "ministro do stf", "ministro do stj", "ministro do tcu",
-        "desembargador", "juiz federal", "procurador geral", "secretario de estado",
-        "secretario municipal", "vereador", "ex deputado", "ex prefeito", "ex senador",
-        "ex governador", "ex ministro"
+        "senador", "senadora", "deputado", "deputada", "governador", "governadora", 
+        "prefeito", "prefeita", "ministro", "ministra", "desembargador", "desembargadora", 
+        "juiz", "juiza", "juiz federal", "procurador", "procuradora", "secretario", 
+        "secretaria", "vereador", "vereadora", "magistrado", "magistrada", "parlamentar", 
+        "ex ministro", "ex senador", "ex deputado", "ex governador", "ex prefeito", "politico", "politica"
     ]
 
     indices_nome = [m.start() for m in re.finditer(re.escape(nome_norm), texto_norm)]
 
     for idx in indices_nome:
-        inicio_janela = max(0, idx - 60)
-        fim_janela = min(len(texto_norm), idx + len(nome_norm) + 60)
+        # Janela ampliada para 250 caracteres em volta do nome
+        inicio_janela = max(0, idx - 250)
+        fim_janela = min(len(texto_norm), idx + len(nome_norm) + 250)
         trecho = texto_norm[inicio_janela:fim_janela]
 
         for cargo in cargos_pep:
@@ -236,7 +237,6 @@ with st.sidebar:
     # STATUS DA PLANILHA OFICIAL LOCAL COM FIXAÇÃO DA DATA (14/08/2026) E CONTADOR DE 30 DIAS
     arquivo_encontrado = identificar_arquivo_pep()
     if arquivo_encontrado:
-        # Data fixa de inclusão da base: Sexta-feira, 14/08/2026
         data_arquivo = datetime(2026, 8, 14)
         dias_desde_atualizacao = (datetime.now() - data_arquivo).days
 
@@ -320,7 +320,7 @@ if btn_pesquisar:
                     res_web = ""
                     queries_estritas = [
                         f'"{nome_limpo}" cargo politico',
-                        f'"{nome_limpo}" deputado OR prefeito OR senador OR ministro OR vereador'
+                        f'"{nome_limpo}" senador OR deputado OR prefeito OR ministro OR vereador OR juiz'
                     ]
                     try:
                         with DDGS() as ddgs:
