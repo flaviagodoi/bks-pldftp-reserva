@@ -12,16 +12,111 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 
 # -----------------------------------------------------------------------------
-# 🛠️ FUNÇÕES DE GESTÃO DE VENCIMENTOS E BASE LOCAL
+# 🔐 CONTROLE DE ADMINISTRADORES E GESTÃO DINÂMICA DE USUÁRIOS APROVADOS
+# -----------------------------------------------------------------------------
+ADMINISTRADORES = [
+    "flavia.godoi@bks.com.br",
+    "neto.duarte@bks.com.br",
+    "thaina.oliveira@bks.com.br"
+]
+
+ARQUIVO_USUARIOS = "usuarios_aprovados.csv"
+
+def carregar_emails_autorizados():
+    """Lê do arquivo local os e-mails liberados ou inicializa com a lista padrão."""
+    emails_padrao = [
+        "flavia.godoi@bks.com.br",
+        "neto.duarte@bks.com.br",
+        "thaina.oliveira@bks.com.br",
+
+    ]
+    
+    if not os.path.exists(ARQUIVO_USUARIOS):
+        salvar_emails_autorizados(emails_padrao)
+        return emails_padrao
+
+    emails = set(emails_padrao)
+    try:
+        with open(ARQUIVO_USUARIOS, mode='r', encoding='utf-8') as f:
+            reader = csv.reader(f)
+            for row in reader:
+                if row and row[0].strip():
+                    emails.add(row[0].strip().lower())
+    except Exception:
+        return emails_padrao
+
+    return list(emails)
+
+def salvar_emails_autorizados(lista_emails):
+    """Salva a lista atualizada de e-mails autorizados no arquivo local."""
+    try:
+        with open(ARQUIVO_USUARIOS, mode='w', encoding='utf-8', newline='') as f:
+            writer = csv.writer(f)
+            for email in set(lista_emails):
+                if email.strip():
+                    writer.writerow([email.strip().lower()])
+    except Exception as e:
+        st.error(f"Erro ao salvar lista de usuários: {e}")
+
+def adicionar_novo_usuario(novo_email):
+    """Adiciona um novo e-mail à lista de aprovados."""
+    email_clean = novo_email.strip().lower()
+    if not email_clean:
+        return False, "O e-mail não pode estar em branco."
+    
+    lista_atual = carregar_emails_autorizados()
+    if email_clean in lista_atual:
+        return False, "Este e-mail já está cadastrado!"
+
+    lista_atual.append(email_clean)
+    salvar_emails_autorizados(lista_atual)
+    return True, f"Usuário {email_clean} autorizado com sucesso!"
+
+def remover_usuario(email_remover):
+    """Remove um e-mail da lista de aprovados."""
+    email_clean = email_remover.strip().lower()
+    lista_atual = carregar_emails_autorizados()
+    if email_clean in lista_atual:
+        lista_atual.remove(email_clean)
+        salvar_emails_autorizados(lista_atual)
+        return True, f"Acesso do e-mail {email_clean} revogado."
+    return False, "Usuário não encontrado."
+
+def verificar_email_autorizado(email: str) -> bool:
+    """Verifica se o e-mail possui permissão de acesso."""
+    if not email:
+        return False
+    email_clean = email.strip().lower()
+    lista_aprovados = carregar_emails_autorizados()
+    
+    if email_clean in lista_aprovados or email_clean.endswith("@bks.com.br"):
+        return True
+    return False
+
+# -----------------------------------------------------------------------------
+# 🛠️ FUNÇÕES DE FORMATAÇÃO ESTÉTICA, GESTÃO DE VENCIMENTOS E BASE LOCAL
 # -----------------------------------------------------------------------------
 ARQUIVO_VENCIMENTOS = "vencimentos.csv"
 
-def registrar_vencimento(nome, cpf, email_operador, status_pep, data_emissao_dt, data_vencimento_str):
-    """
-    Grava ou ATUALIZA o histórico do relatório gerado.
-    Evita duplicidade substituindo o registro caso o CPF já exista no arquivo.
-    """
-    cpf_limpo_key = re.sub(r'\D', '', cpf)
+def formatar_cpf_estetico(cpf_raw: str) -> str:
+    """Aplica a máscara estética 000.000.000-00 mantendo os zeros à esquerda."""
+    nums = re.sub(r'\D', '', str(cpf_raw))
+    if len(nums) == 11:
+        return f"{nums[:3]}.{nums[3:6]}.{nums[6:9]}-{nums[9:]}"
+    return str(cpf_raw).strip()
+
+def mascarar_cpf(cpf_raw: str) -> str:
+    """Oculta o miolo do CPF no padrão LGPD (ex: 123.***.***-89)."""
+    nums = re.sub(r'\D', '', str(cpf_raw))
+    if len(nums) == 11:
+        return f"{nums[:3]}.***.***-{nums[9:]}"
+    return "***.***.***-**"
+
+def registrar_vencimento(nome, cpf_raw, email_operador, status_pep, data_emissao_dt, data_vencimento_str):
+    """Grava ou ATUALIZA o histórico do relatório gerado sem duplicidade."""
+    cpf_limpo_key = re.sub(r'\D', '', cpf_raw)
+    cpf_formatado = formatar_cpf_estetico(cpf_raw)
+    cpf_mascarado = mascarar_cpf(cpf_raw)
     registros_existentes = carregar_vencimentos()
     
     try:
@@ -31,7 +126,8 @@ def registrar_vencimento(nome, cpf, email_operador, status_pep, data_emissao_dt,
 
     novo_registro = {
         "Nome": nome.upper().strip(),
-        "CPF": cpf.strip(),
+        "CPF": cpf_formatado,
+        "CPF_Mascarado": cpf_mascarado,
         "CPF_Key": cpf_limpo_key,
         "Operador": email_operador,
         "Data_Emissao": data_emissao_dt.strftime("%d/%m/%Y %H:%M"),
@@ -40,11 +136,10 @@ def registrar_vencimento(nome, cpf, email_operador, status_pep, data_emissao_dt,
         "Data_Vencimento_ISO": dt_venc
     }
 
-    # Atualiza o registro existente ou adiciona um novo
     atualizado = False
     novos_registros = []
     for reg in registros_existentes:
-        reg_cpf_key = re.sub(r'\D', '', reg.get("CPF", ""))
+        reg_cpf_key = re.sub(r'\D', '', reg.get("CPF_Key", reg.get("CPF", "")))
         if reg_cpf_key == cpf_limpo_key and cpf_limpo_key != "":
             novos_registros.append(novo_registro)
             atualizado = True
@@ -55,12 +150,11 @@ def registrar_vencimento(nome, cpf, email_operador, status_pep, data_emissao_dt,
         novos_registros.append(novo_registro)
 
     try:
-        campos = ["Nome", "CPF", "CPF_Key", "Operador", "Data_Emissao", "Status_PEP", "Data_Vencimento", "Data_Vencimento_ISO"]
+        campos = ["Nome", "CPF", "CPF_Mascarado", "CPF_Key", "Operador", "Data_Emissao", "Status_PEP", "Data_Vencimento", "Data_Vencimento_ISO"]
         with open(ARQUIVO_VENCIMENTOS, mode='w', encoding='utf-8-sig', newline='') as f:
             writer = csv.DictWriter(f, fieldnames=campos, delimiter=';')
             writer.writeheader()
             for r in novos_registros:
-                # Garante que as chaves estejam presentes
                 r_line = {k: r.get(k, "") for k in campos}
                 writer.writerow(r_line)
     except Exception as e:
@@ -129,7 +223,7 @@ def identificar_arquivo_pep():
     return None
 
 def buscar_na_planilha_pep(nome_input, cpf_input):
-    """Busca na planilha oficial da CGU com regra adaptativa anti-mascaramento."""
+    """Busca flexível na planilha oficial da CGU."""
     caminho_final = identificar_arquivo_pep()
     if not caminho_final:
         return None
@@ -267,12 +361,12 @@ if not st.session_state.autenticado:
         
         if st.button("🔓 Entrar no Sistema", use_container_width=True):
             if senha_digitada == SENHA_GERAL:
-                if not email_digitado:
-                    email_digitado = "operacao@bks.com.br"
-                
-                st.session_state.autenticado = True
-                st.session_state.email_logado = email_digitado
-                st.rerun()
+                if verificar_email_autorizado(email_digitado):
+                    st.session_state.autenticado = True
+                    st.session_state.email_logado = email_digitado
+                    st.rerun()
+                else:
+                    st.error("⚠️ **Acesso Negado:** O e-mail informado não possui permissão de acesso. Contate um administrador de compliance.")
             else:
                 st.error("❌ Senha incorreta! Verifique seus dados de acesso.")
     st.stop()
@@ -280,6 +374,8 @@ if not st.session_state.autenticado:
 # -----------------------------------------------------------------------------
 # 🛡️ BARRA LATERAL (SIDEBAR) & NAVEGAÇÃO
 # -----------------------------------------------------------------------------
+eh_admin = st.session_state.email_logado.strip().lower() in [adm.lower() for adm in ADMINISTRADORES]
+
 with st.sidebar:
     if os.path.exists("logo_bks.png"):
         st.image("logo_bks.png", use_container_width=True)
@@ -289,19 +385,22 @@ with st.sidebar:
     st.markdown("### 🟢 Status: **Operacional**")
     st.caption("BKS Corretora & BKS Re Resseguros")
     st.markdown("---")
-    st.markdown(f"📧 **E-mail:** {st.session_state.email_logado}")
+    
+    if eh_admin:
+        st.markdown(f"📧 **Operador:** {st.session_state.email_logado}\n*(⭐ Administrador)*")
+    else:
+        st.markdown(f"📧 **Operador:** {st.session_state.email_logado}")
+        
     st.markdown("---")
     
-    # Se houver pedido de renovação pendente, força a navegação para a tela de busca
-    if st.session_state.renovar_nome:
-        index_menu = 0
-    else:
-        index_menu = 0
+    opcoes_menu = ["🔍 Consulta PLD/FTP", "📊 Gestão de Vencimentos"]
+    if eh_admin:
+        opcoes_menu.append("⚙️ Gerenciador de Usuários")
 
     opcao_menu = st.radio(
         "📌 Menu de Navegação:",
-        ["🔍 Consulta PLD/FTP", "📊 Gestão de Vencimentos"],
-        index=index_menu
+        opcoes_menu,
+        index=0
     )
     
     st.markdown("---")
@@ -341,9 +440,8 @@ if opcao_menu == "🔍 Consulta PLD/FTP":
     st.caption("Pesquisa automatizada em portais de transparência e bases públicas para enquadramento regulatório.")
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # Preenchimento automático caso venha de um clique em "Renovar"
     val_nome_def = st.session_state.renovar_nome if st.session_state.renovar_nome else ""
-    val_cpf_def = st.session_state.renovar_cpf if st.session_state.renovar_cpf else ""
+    val_cpf_def = formatar_cpf_estetico(st.session_state.renovar_cpf) if st.session_state.renovar_cpf else ""
 
     with st.container():
         st.markdown("### 📋 Dados do Pesquisado")
@@ -351,17 +449,17 @@ if opcao_menu == "🔍 Consulta PLD/FTP":
         with col1:
             nome_input = st.text_input("👉 Nome Completo do Pesquisado", value=val_nome_def, placeholder="Ex: João da Silva")
         with col2:
-            cpf_input = st.text_input("👉 CPF do Pesquisado", value=val_cpf_def, placeholder="Ex: 000.000.000-00")
+            cpf_input = st.text_input("👉 CPF do Pesquisado (Números ou Formatado)", value=val_cpf_def, placeholder="000.000.000-00")
 
         st.markdown("<br>", unsafe_allow_html=True)
         btn_pesquisar = st.button("🔎 Iniciar Consulta e Gerar Relatório PDF", type="primary", use_container_width=True)
 
     if btn_pesquisar or (st.session_state.renovar_nome and st.session_state.renovar_cpf):
-        # Limpa os estados do clique de renovação após engatar a busca
         st.session_state.renovar_nome = ""
         st.session_state.renovar_cpf = ""
         
         cpf_valido_bool = validar_cpf(cpf_input)
+        cpf_formatado_input = formatar_cpf_estetico(cpf_input)
         
         if not nome_input.strip():
             st.warning("⚠️ Por favor, preencha o Nome Completo antes de continuar.")
@@ -445,10 +543,10 @@ if opcao_menu == "🔍 Consulta PLD/FTP":
                     PARECER = "Consulta realizada na base oficial de transparência da CGU e portais públicos. Não foram identificados cargos políticos ativos nem histórico de exposição pública para o Nome e CPF informados."
                     PROXIMA_ATUALIZACAO = (agora_dt + timedelta(days=365)).strftime('%d/%m/%Y')
 
-                # REGISTRA OU ATUALIZA O VENCIMENTO (SEM DUPLICAR)
+                # REGISTRA / ATUALIZA NO CONTROLE DE VENCIMENTOS
                 registrar_vencimento(
                     nome=nome_input,
-                    cpf=cpf_input,
+                    cpf_raw=cpf_input,
                     email_operador=st.session_state.email_logado,
                     status_pep=STATUS_PEP,
                     data_emissao_dt=agora_dt,
@@ -602,7 +700,7 @@ if opcao_menu == "🔍 Consulta PLD/FTP":
 
                 make_sec("1. DADOS QUALIFICATIVOS DO PESQUISADO", [
                     ("NOME COMPLETO", nome_input.upper()),
-                    ("CPF", cpf_input),
+                    ("CPF", cpf_formatado_input),
                     ("PERFIL E NATUREZA", "Pessoa Física"),
                     ("CARGO / EXPOSIÇÃO", CARGOS_EXERCIDOS)
                 ])
@@ -702,9 +800,14 @@ elif opcao_menu == "📊 Gestão de Vencimentos":
             except Exception:
                 status_alerta = "⚪ Indefinido"
 
+            cpf_completo = reg.get("CPF_Key", reg.get("CPF", ""))
+            cpf_mascarado = reg.get("CPF_Mascarado", mascarar_cpf(cpf_completo))
+
             dados_processados.append({
                 "Nome Completo": reg.get("Nome", ""),
-                "CPF": reg.get("CPF", ""),
+                "CPF_Exibicao": cpf_mascarado,
+                "CPF_Real": cpf_completo,
+                "CPF_Excel": f'="{cpf_mascarado}"',
                 "Status PEP": reg.get("Status_PEP", ""),
                 "Data de Emissão": reg.get("Data_Emissao", ""),
                 "Data de Vencimento": reg.get("Data_Vencimento", ""),
@@ -712,7 +815,6 @@ elif opcao_menu == "📊 Gestão de Vencimentos":
                 "Operador": reg.get("Operador", "")
             })
 
-        # METRICAS
         col_m1, col_m2, col_m3, col_m4 = st.columns(4)
         col_m1.metric("Total de Relatórios", len(registros))
         col_m2.metric("🟢 Dentro do Prazo", validos)
@@ -722,7 +824,6 @@ elif opcao_menu == "📊 Gestão de Vencimentos":
         st.markdown("---")
         st.subheader("🔍 Filtros de Busca")
 
-        # FILTROS
         col_f1, col_f2 = st.columns([1, 2])
         with col_f1:
             filtro_status = st.selectbox(
@@ -732,10 +833,8 @@ elif opcao_menu == "📊 Gestão de Vencimentos":
         with col_f2:
             termo_busca = st.text_input("Buscar por Nome ou CPF:", placeholder="Digite o nome ou CPF...")
 
-        # APLICA FILTROS
         dados_filtrados = []
         for item in dados_processados:
-            # Filtro de Status
             if filtro_status == "🔴 Apenas Vencidos" and "🔴" not in item["Status do Prazo"]:
                 continue
             elif filtro_status == "🟡 Vencem em breve" and "🟡" not in item["Status do Prazo"]:
@@ -743,11 +842,10 @@ elif opcao_menu == "📊 Gestão de Vencimentos":
             elif filtro_status == "🟢 Apenas Válidos" and "🟢" not in item["Status do Prazo"]:
                 continue
 
-            # Filtro de Texto
             if termo_busca:
                 tb_norm = normalizar_texto(termo_busca)
                 nome_norm = normalizar_texto(item["Nome Completo"])
-                cpf_limpo = re.sub(r'\D', '', item["CPF"])
+                cpf_limpo = re.sub(r'\D', '', item["CPF_Real"])
                 tb_limpo = re.sub(r'\D', '', termo_busca)
                 if tb_norm not in nome_norm and (tb_limpo == "" or tb_limpo not in cpf_limpo):
                     continue
@@ -760,14 +858,30 @@ elif opcao_menu == "📊 Gestão de Vencimentos":
         if not dados_filtrados:
             st.warning("Nenhum registro localizado com os filtros selecionados.")
         else:
-            # EXIBIÇÃO INTERATIVA COM BOTAO RENOVAR
+            col_h1, col_h2, col_h3, col_h4, col_h5, col_h6, col_h7 = st.columns([2.5, 1.3, 1, 1.5, 1.2, 1.2, 1])
+            with col_h1:
+                st.markdown("**👤 Nome Completo**")
+            with col_h2:
+                st.markdown("**📄 CPF (LGPD)**")
+            with col_h3:
+                st.markdown("**🛡️ Status PEP**")
+            with col_h4:
+                st.markdown("**📅 Data Emissão**")
+            with col_h5:
+                st.markdown("**⏰ Data Vencimento**")
+            with col_h6:
+                st.markdown("**📌 Status Prazo**")
+            with col_h7:
+                st.markdown("**⚡ Ação**")
+            st.markdown("---")
+
             for idx, item in enumerate(dados_filtrados):
                 c_n, c_c, c_p, c_e, c_v, c_s, c_b = st.columns([2.5, 1.3, 1, 1.5, 1.2, 1.2, 1])
                 
                 with c_n:
                     st.write(f"**{item['Nome Completo']}**")
                 with c_c:
-                    st.write(item["CPF"])
+                    st.write(item["CPF_Exibicao"])
                 with c_p:
                     st.write(item["Status PEP"])
                 with c_e:
@@ -779,18 +893,31 @@ elif opcao_menu == "📊 Gestão de Vencimentos":
                 with c_b:
                     if st.button("🔄 Renovar", key=f"btn_renovar_{idx}"):
                         st.session_state.renovar_nome = item["Nome Completo"]
-                        st.session_state.renovar_cpf = item["CPF"]
+                        st.session_state.renovar_cpf = item["CPF_Real"]
                         st.rerun()
                 st.divider()
 
         st.markdown("<br>", unsafe_allow_html=True)
 
-        # BOTAO PARA EXPORTAR PARA EXCEL EM COLUNAS SEPARADAS (DELIMITADOR ';')
         csv_buffer = io.StringIO()
         campos = ["Nome Completo", "CPF", "Status PEP", "Data de Emissão", "Data de Vencimento", "Status do Prazo", "Operador"]
         writer = csv.DictWriter(csv_buffer, fieldnames=campos, delimiter=';')
         writer.writeheader()
-        writer.writerows(dados_filtrados if dados_filtrados else dados_processados)
+        
+        dados_excel = []
+        for d in (dados_filtrados if dados_filtrados else dados_processados):
+            row_e = {
+                "Nome Completo": d["Nome Completo"],
+                "CPF": d["CPF_Excel"],
+                "Status PEP": d["Status PEP"],
+                "Data de Emissão": d["Data de Emissão"],
+                "Data de Vencimento": d["Data de Vencimento"],
+                "Status do Prazo": d["Status do Prazo"],
+                "Operador": d["Operador"]
+            }
+            dados_excel.append(row_e)
+
+        writer.writerows(dados_excel)
 
         st.download_button(
             label="📥 Exportar Lista em Colunas (.CSV para Excel)",
@@ -799,3 +926,65 @@ elif opcao_menu == "📊 Gestão de Vencimentos":
             mime="text/csv",
             use_container_width=True
         )
+
+# =============================================================================
+# ⚙️ TELA 3: GERENCIADOR DE USUÁRIOS (EXCLUSIVO PARA ADMINISTRADORES)
+# =============================================================================
+elif opcao_menu == "⚙️ Gerenciador de Usuários" and eh_admin:
+    st.title("⚙️ Gerenciador de Usuários Aprovados")
+    st.caption("Painel administrativo para conceder ou revogar acessos de operadores à plataforma.")
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    col_add1, col_add2 = st.columns([3, 1])
+    with col_add1:
+        novo_email_input = st.text_input("➕ Digite o novo e-mail para autorizar acesso:", placeholder="novo.operador@bks.com.br")
+    with col_add2:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("✅ Autorizar Usuário", use_container_width=True):
+            sucesso, msg = adicionar_novo_usuario(novo_email_input)
+            if sucesso:
+                st.success(msg)
+                st.rerun()
+            else:
+                st.warning(msg)
+
+    st.markdown("---")
+    st.subheader("📋 Lista de Usuários com Acesso Liberado")
+
+    lista_usuarios = carregar_emails_autorizados()
+
+    if not lista_usuarios:
+        st.info("Nenhum usuário cadastrado além dos e-mails padrão.")
+    else:
+        col_u_head1, col_u_head2, col_u_head3 = st.columns([3, 2, 1])
+        with col_u_head1:
+            st.markdown("**📧 E-mail Autorizado**")
+        with col_u_head2:
+            st.markdown("**Nível de Acesso**")
+        with col_u_head3:
+            st.markdown("**Ação**")
+        st.markdown("---")
+
+        admins_lower = [a.lower() for a in ADMINISTRADORES]
+
+        for idx, usr in enumerate(lista_usuarios):
+            c_u1, c_u2, c_u3 = st.columns([3, 2, 1])
+            with c_u1:
+                st.write(f"**{usr}**")
+            with c_u2:
+                if usr.lower() in admins_lower:
+                    st.write("⭐ Administrador")
+                else:
+                    st.write("👤 Operador")
+            with c_u3:
+                if usr.lower() in admins_lower:
+                    st.caption("Protegido")
+                else:
+                    if st.button("🗑️ Revogar", key=f"btn_del_usr_{idx}"):
+                        ok, m = remover_usuario(usr)
+                        if ok:
+                            st.success(m)
+                            st.rerun()
+                        else:
+                            st.error(m)
+            st.divider()
