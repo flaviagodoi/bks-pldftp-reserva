@@ -18,7 +18,7 @@ ADMINISTRADORES = [
     "flavia.godoi@bks.com.br",
     "neto.duarte@bks.com.br",
     "thaina.oliveira@bks.com.br"
-
+]
 
 ARQUIVO_USUARIOS = "usuarios_aprovados.csv"
 
