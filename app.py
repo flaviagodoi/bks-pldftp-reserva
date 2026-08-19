@@ -46,15 +46,15 @@ def sincronizar_com_github(caminho_arquivo, mensagem_commit):
         pass
 
 # -----------------------------------------------------------------------------
-# 🔐 CONTROLE DE ACESSOS, ADMINISTRADORES E USUÁRIOS
+# 🔐 CONTROLE DE ACESSO, HIERARQUIA DE CARGOS E USUÁRIOS
 # -----------------------------------------------------------------------------
-ADMINISTRADORES_NATIVOS = [
-    "flavia.godoi@bks.com.br",
-    "marcio.akama@bks.com.br",
-    "leiko.akama@bks.com.br",
-    "neto.duarte@bks.com.br",
-    "thaina.oliveira@bks.com.br"
-]
+CARGOS_NATIVOS = {
+    "flavia.godoi@bks.com.br": "Administrador/Programador",
+    "marcio.akama@bks.com.br": "Diretoria",
+    "leiko.akama@bks.com.br": "Diretoria",
+    "neto.duarte@bks.com.br": "Gerente",
+    "thaina.oliveira@bks.com.br": "Administrador"
+}
 
 USUARIOS_PADRAO_NATIVOS = [
     "ariana.reis@bks.com.br",
@@ -69,14 +69,9 @@ USUARIOS_PADRAO_NATIVOS = [
 ARQUIVO_USUARIOS = "usuarios_aprovados.csv"
 
 def carregar_usuarios():
-    """Carrega o dicionário de usuários com seus respectivos papéis ('admin' ou 'operador')."""
+    """Carrega o dicionário de usuários mantendo a hierarquia corporativa nativa."""
     usuarios = {}
-    for adm in ADMINISTRADORES_NATIVOS:
-        usuarios[adm.lower()] = "admin"
-    for usr in USUARIOS_PADRAO_NATIVOS:
-        if usr.lower() not in usuarios:
-            usuarios[usr.lower()] = "operador"
-
+    
     if os.path.exists(ARQUIVO_USUARIOS):
         try:
             with open(ARQUIVO_USUARIOS, mode='r', encoding='utf-8') as f:
@@ -84,26 +79,33 @@ def carregar_usuarios():
                 for row in reader:
                     if row and len(row) >= 1 and row[0].strip():
                         email = row[0].strip().lower()
-                        papel = row[1].strip().lower() if len(row) >= 2 else "operador"
-                        usuarios[email] = papel
+                        cargo = row[1].strip() if len(row) >= 2 else "Operador"
+                        usuarios[email] = cargo
         except Exception:
             pass
+
+    for usr in USUARIOS_PADRAO_NATIVOS:
+        if usr.lower() not in usuarios:
+            usuarios[usr.lower()] = "Operador"
+
+    for email_adm, cargo_adm in CARGOS_NATIVOS.items():
+        usuarios[email_adm.lower()] = cargo_adm
 
     return usuarios
 
 def salvar_usuarios_csv(dict_usuarios):
-    """Grava os usuários e papéis no CSV e sincroniza com o GitHub."""
+    """Grava os usuários e cargos no CSV e sincroniza com o GitHub."""
     try:
         with open(ARQUIVO_USUARIOS, mode='w', encoding='utf-8', newline='') as f:
             writer = csv.writer(f, delimiter=';')
-            for email, papel in dict_usuarios.items():
-                writer.writerow([email, papel])
+            for email, cargo in dict_usuarios.items():
+                writer.writerow([email, cargo])
         sincronizar_com_github(ARQUIVO_USUARIOS, "Atualização da lista de usuários via Painel PLD/FTP")
     except Exception as e:
         st.error(f"Erro ao salvar lista de usuários: {e}")
 
-def adicionar_novo_usuario(email_input, perfil_escolhido):
-    """Adiciona um novo e-mail com a permissão definida."""
+def adicionar_novo_usuario(email_input, cargo_escolhido):
+    """Adiciona um novo e-mail com o cargo definido."""
     email_clean = email_input.strip().lower()
     if not email_clean:
         return False, "O e-mail não pode estar em branco."
@@ -112,15 +114,18 @@ def adicionar_novo_usuario(email_input, perfil_escolhido):
     if email_clean in dict_atual:
         return False, "Este e-mail já está cadastrado!"
 
-    dict_atual[email_clean] = perfil_escolhido
+    dict_atual[email_clean] = cargo_escolhido
     salvar_usuarios_csv(dict_atual)
-    return True, f"Usuário {email_clean} ({perfil_escolhido.title()}) cadastrado com sucesso!"
+    return True, f"Usuário {email_clean} ({cargo_escolhido}) cadastrado com sucesso!"
 
 def remover_usuario(email_remover):
-    """Remove um usuário cadastrado com garantia de exclusão."""
+    """Remove um usuário cadastrado mantendo e-mails corporativos protegidos."""
     email_clean = email_remover.strip().lower()
     dict_atual = carregar_usuarios()
     
+    if email_clean in [a.lower() for a in CARGOS_NATIVOS.keys()]:
+        return False, "E-mail da diretoria/administração nativa protegido contra exclusão."
+
     if email_clean in dict_atual:
         del dict_atual[email_clean]
         salvar_usuarios_csv(dict_atual)
@@ -136,12 +141,21 @@ def verificar_email_autorizado(email: str) -> bool:
     return email_clean in dict_usuarios or email_clean.endswith("@bks.com.br") or email_clean.endswith("@bksre.com.br")
 
 def eh_administrador(email: str) -> bool:
-    """Retorna True se o e-mail logado tiver privilégios administrativos."""
+    """Retorna True se o e-mail logado tiver privilégios administrativos/gerenciais."""
     if not email:
         return False
     email_clean = email.strip().lower()
     dict_usuarios = carregar_usuarios()
-    return dict_usuarios.get(email_clean) == "admin" or email_clean in [a.lower() for a in ADMINISTRADORES_NATIVOS]
+    cargo = dict_usuarios.get(email_clean, "Operador")
+    return cargo in ["Administrador/Programador", "Diretoria", "Gerente", "Administrador"] or email_clean in [a.lower() for a in CARGOS_NATIVOS.keys()]
+
+def obter_cargo_usuario(email: str) -> str:
+    """Retorna o título oficial do cargo do e-mail informado."""
+    if not email:
+        return "Operador"
+    email_clean = email.strip().lower()
+    dict_usuarios = carregar_usuarios()
+    return dict_usuarios.get(email_clean, "Operador")
 
 # -----------------------------------------------------------------------------
 # 🛠️ FUNÇÕES DE FORMATAÇÃO ESTÉTICA, VALIDAÇÃO E BUSCAS (CGU + WEB)
@@ -388,12 +402,32 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# ESTILIZAÇÃO CSS CUSTOMIZADA (INCLUI BOTOES AZUIS NATIVOS)
 st.markdown("""
     <style>
     .main { background-color: #f8f9fa; }
     h1 { color: #0056b3; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-weight: 700; margin-bottom: 0px; }
-    div.stButton > button:first-child { background-color: #0056b3; color: white; font-weight: bold; border-radius: 6px; border: none; padding: 12px 24px; transition: all 0.3s ease; }
+    div.stButton > button:first-child { background-color: #0056b3; color: white; font-weight: bold; border-radius: 6px; border: none; padding: 10px 20px; transition: all 0.3s ease; }
     div.stButton > button:first-child:hover { background-color: #003366; box-shadow: 0 4px 8px rgba(0,0,0,0.15); }
+    
+    /* ESTILIZAÇÃO DOS BOTOES AZUIS DA RECEITA FEDERAL */
+    a.btn-receita-azul {
+        display: block;
+        width: 100%;
+        background-color: #0056b3;
+        color: white !important;
+        text-align: center;
+        font-weight: bold;
+        padding: 12px 20px;
+        border-radius: 6px;
+        text-decoration: none;
+        margin-top: 10px;
+        transition: all 0.3s ease;
+    }
+    a.btn-receita-azul:hover {
+        background-color: #003366;
+        box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -434,25 +468,37 @@ if not st.session_state.autenticado:
 # 🛡️ BARRA LATERAL (SIDEBAR) & NAVEGAÇÃO
 # -----------------------------------------------------------------------------
 eh_admin = eh_administrador(st.session_state.email_logado)
+cargo_usuario_logado = obter_cargo_usuario(st.session_state.email_logado)
 
 with st.sidebar:
-    if os.path.exists("logo_bks.png"):
-        st.image("logo_bks.png", use_container_width=True)
-    elif os.path.exists("logo_bksre.png"):
-        st.image("logo_bksre.png", use_container_width=True)
-    
+    # EXIBIÇÃO DE LOGOS DUPAS (BKS CORRETORA & BKS RE)
+    col_logo1, col_logo2 = st.columns(2)
+    with col_logo1:
+        if os.path.exists("logo_bks.png"):
+            st.image("logo_bks.png", use_container_width=True)
+        else:
+            st.caption("BKS Corretora")
+    with col_logo2:
+        if os.path.exists("logo_bksre.png"):
+            st.image("logo_bksre.png", use_container_width=True)
+        else:
+            st.caption("BKS Re Resseguros")
+            
     st.markdown("### 🟢 Status: **Operacional**")
     st.caption("BKS Corretora & BKS Re Resseguros")
     st.markdown("---")
     
-    if eh_admin:
-        st.markdown(f"📧 **Operador:** {st.session_state.email_logado}\n*(⭐ Administrador)*")
-    else:
-        st.markdown(f"📧 **Operador:** {st.session_state.email_logado}\n*(👤 Operador)*")
+    st.markdown(f"📧 **Operador:** {st.session_state.email_logado}\n\n*(⭐ {cargo_usuario_logado})*")
         
     st.markdown("---")
     
-    opcoes_menu = ["🔍 Consulta PLD/FTP", "📊 Gestão de Vencimentos", "⚙️ Gerenciador de Usuários"]
+    # REORGANIZAÇÃO DO MENU SOLICITADA
+    opcoes_menu = [
+        "🏛️ Consultas Receita Federal (PF/PJ)",
+        "🔍 Consulta PLD/FTP", 
+        "📊 Gestão de Vencimentos", 
+        "⚙️ Gerenciador de Usuários"
+    ]
 
     opcao_menu = st.radio(
         "📌 Menu de Navegação:",
@@ -462,7 +508,7 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # NOTIFICAÇÃO DE BASE DE DADOS (VISÍVEL PARA TODOS)
+    # NOTIFICAÇÃO DE BASE DE DADOS (VISÍVEL PARA TODOS COM FONTE INCLUÍDA)
     arquivo_encontrado = identificar_arquivo_pep()
     if arquivo_encontrado:
         data_arquivo = datetime(2026, 8, 14)
@@ -474,13 +520,10 @@ with st.sidebar:
         else:
             st.success("📁 **Base PEP Local:** Carregada e Ativa")
             st.caption(f"🗓️ *Inclusão da base: {data_arquivo.strftime('%d/%m/%Y')}*")
+            st.caption("🏛️ *Fonte: Portal da Transparência - Controladoria Geral da União*")
     else:
         st.info("🌐 **Base PEP Local:** Não enc. (Modo Web Ativo)")
 
-    st.markdown("---")
-    st.markdown("### 🏛️ Consultas Receita Federal")
-    st.link_button("📄 Consulta CPF (Receita)", "https://servicos.receita.fazenda.gov.br/Servicos/CPF/ConsultaSituacao/ConsultaPublica.asp", use_container_width=True)
-    st.link_button("🏢 Consulta CNPJ (Receita)", "https://solucoes.receita.fazenda.gov.br/Servicos/cnpjreva/cnpjreva_solicitacao.asp", use_container_width=True)
     st.markdown("---")
     
     if st.button("🔒 Sair do Sistema", use_container_width=True):
@@ -491,9 +534,32 @@ with st.sidebar:
         st.rerun()
 
 # =============================================================================
-# 📌 TELA 1: CONSULTA PLD/FTP
+# 🏛️ TELA 1: CONSULTAS RECEITA FEDERAL (PF / PJ)
 # =============================================================================
-if opcao_menu == "🔍 Consulta PLD/FTP":
+if opcao_menu == "🏛️ Consultas Receita Federal (PF/PJ)":
+    st.title("🏛️ Consultas Oficiais na Receita Federal")
+    st.caption("Acesso direto aos portais governamentais para emissão de Comprovante de Situação Cadastral de CPF e CNPJ.")
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    col_rf1, col_rf2 = st.columns(2)
+    
+    with col_rf1:
+        st.markdown("### 📄 Pessoa Física (CPF)")
+        st.write("Acesse a página oficial da Receita Federal para emitir e validar o comprovante de situação cadastral do CPF.")
+        st.markdown('<a href="https://servicos.receita.fazenda.gov.br/Servicos/CPF/ConsultaSituacao/ConsultaPublica.asp" target="_blank" class="btn-receita-azul">👉 Acessar Consulta CPF (Receita Federal)</a>', unsafe_allow_html=True)
+
+    with col_rf2:
+        st.markdown("### 🏢 Pessoa Jurídica (CNPJ)")
+        st.write("Acesse a página oficial da Receita Federal para emitir o Cartão CNPJ e verificar a situação cadastral da empresa.")
+        st.markdown('<a href="https://solucoes.receita.fazenda.gov.br/Servicos/cnpjreva/cnpjreva_solicitacao.asp" target="_blank" class="btn-receita-azul">👉 Acessar Consulta CNPJ (Receita Federal)</a>', unsafe_allow_html=True)
+
+    st.markdown("<br><br>---", unsafe_allow_html=True)
+    st.info("💡 **Dica de Governança:** É recomendado anexar a Consulta de Situação Cadastral emitida nestes links ao laudo final de PLD/FTP para documentação de auditoria.")
+
+# =============================================================================
+# 📌 TELA 2: CONSULTA PLD/FTP
+# =============================================================================
+elif opcao_menu == "🔍 Consulta PLD/FTP":
     st.title("🛡️ Painel Oficial de Consulta PLD/FTP")
     st.caption("Pesquisa automatizada em portais de transparência e bases públicas para enquadramento regulatório.")
     st.markdown("<br>", unsafe_allow_html=True)
@@ -822,7 +888,7 @@ if opcao_menu == "🔍 Consulta PLD/FTP":
                 )
 
 # =============================================================================
-# 📊 TELA 2: GESTÃO DE VENCIMENTOS DOS RELATÓRIOS
+# 📊 TELA 3: GESTÃO DE VENCIMENTOS DOS RELATÓRIOS
 # =============================================================================
 elif opcao_menu == "📊 Gestão de Vencimentos":
     st.title("📊 Gestão de Vencimentos de Relatórios PLD/FTP")
@@ -931,8 +997,9 @@ elif opcao_menu == "📊 Gestão de Vencimentos":
                 st.markdown("**📌 Status Prazo**")
             with col_h7:
                 st.markdown("**⚡ Ação**")
-            st.markdown("---")
+            st.markdown("<hr style='margin-top:2px; margin-bottom:8px;'>", unsafe_allow_html=True)
 
+            # REDUÇÃO SUTIL DE ESPAÇAMENTO DA TABELA
             for idx, item in enumerate(dados_filtrados):
                 c_n, c_c, c_p, c_e, c_v, c_s, c_b = st.columns([2.5, 1.3, 1, 1.5, 1.2, 1.2, 1])
                 
@@ -953,7 +1020,7 @@ elif opcao_menu == "📊 Gestão de Vencimentos":
                         st.session_state.renovar_nome = item["Nome Completo"]
                         st.session_state.renovar_cpf = item["CPF_Real"]
                         st.rerun()
-                st.divider()
+                st.markdown("<hr style='margin-top:2px; margin-bottom:2px; border: 0.5px solid #e6e6e6;'>", unsafe_allow_html=True)
 
         # BOTÃO DE EXPORTAÇÃO EXCLUSIVO PARA ADMINISTRADORES
         if eh_admin:
@@ -987,11 +1054,11 @@ elif opcao_menu == "📊 Gestão de Vencimentos":
             )
 
 # =============================================================================
-# ⚙️ TELA 3: GERENCIADOR DE USUÁRIOS E PERMISSÕES
+# ⚙️ TELA 4: GERENCIADOR DE USUÁRIOS E PERMISSÕES
 # =============================================================================
 elif opcao_menu == "⚙️ Gerenciador de Usuários":
     st.title("⚙️ Gerenciador de Usuários Aprovados")
-    st.caption("Painel administrativo para controle de acessos e permissões dos operadores.")
+    st.caption("Painel de controle de acessos e permissões dos operadores.")
     st.markdown("<br>", unsafe_allow_html=True)
 
     # FORMULÁRIO DE INCLUSÃO (EXCLUSIVO PARA ADMINS)
@@ -1000,7 +1067,7 @@ elif opcao_menu == "⚙️ Gerenciador de Usuários":
         with col_add1:
             novo_email_input = st.text_input("➕ Digite o e-mail para autorizar:", placeholder="novo.usuario@bks.com.br")
         with col_add2:
-            perfil_input = st.selectbox("Nível de Acesso:", ["operador", "admin"])
+            perfil_input = st.selectbox("Cargo / Perfil:", ["Operador", "Administrador", "Diretoria"])
         with col_add3:
             st.markdown("<br>", unsafe_allow_html=True)
             if st.button("✅ Autorizar", use_container_width=True):
@@ -1023,27 +1090,35 @@ elif opcao_menu == "⚙️ Gerenciador de Usuários":
         with col_u_head1:
             st.markdown("**📧 E-mail Autorizado**")
         with col_u_head2:
-            st.markdown("**Nível de Acesso**")
+            st.markdown("**Cargo / Perfil**")
         with col_u_head3:
             st.markdown("**Ação**")
-        st.markdown("---")
+        st.markdown("<hr style='margin-top:2px; margin-bottom:8px;'>", unsafe_allow_html=True)
 
-        for idx, (usr_email, papel) in enumerate(sorted(dict_usuarios.items())):
+        admins_nativos_lower = [a.lower() for a in CARGOS_NATIVOS.keys()]
+
+        # REDUÇÃO SUTIL DE ESPAÇAMENTO NA LISTA DE USUÁRIOS
+        for idx, (usr_email, cargo_usr) in enumerate(sorted(dict_usuarios.items())):
             c_u1, c_u2, c_u3 = st.columns([3, 2, 1])
             with c_u1:
                 st.write(f"**{usr_email}**")
             with c_u2:
-                if papel == "admin":
-                    st.write("⭐ Administrador")
+                if cargo_usr == "Administrador/Programador":
+                    st.write("⭐ Administrador/Programador")
+                elif cargo_usr == "Diretoria":
+                    st.write("🏛️ Diretoria")
+                elif cargo_usr == "Gerente":
+                    st.write("💼 Gerente")
+                elif cargo_usr in ["Administrador", "admin"]:
+                    st.write("🔑 Administrador")
                 else:
                     st.write("👤 Operador")
             with c_u3:
-                # SOMENTE ADMIN PODE DELETAR (E NÃO PODE DELETAR SI MESMO)
                 if eh_admin:
-                    if usr_email.lower() == st.session_state.email_logado.strip().lower():
-                        st.caption("Você")
+                    if usr_email in admins_nativos_lower or usr_email == st.session_state.email_logado.strip().lower():
+                        st.caption("Protegido")
                     else:
-                        if st.button("🗑️ Revogar", key=f"btn_delete_user_{usr_email}_{idx}"):
+                        if st.button("🗑️ Revogar", key=f"btn_del_usr_final_{usr_email}_{idx}"):
                             ok, msg_del = remover_usuario(usr_email)
                             if ok:
                                 st.success(msg_del)
@@ -1052,4 +1127,4 @@ elif opcao_menu == "⚙️ Gerenciador de Usuários":
                                 st.error(msg_del)
                 else:
                     st.caption("🔒 Leitura")
-            st.divider()
+            st.markdown("<hr style='margin-top:2px; margin-bottom:2px; border: 0.5px solid #e6e6e6;'>", unsafe_allow_html=True)
