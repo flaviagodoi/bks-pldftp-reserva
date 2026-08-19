@@ -46,93 +46,105 @@ def sincronizar_com_github(caminho_arquivo, mensagem_commit):
         pass
 
 # -----------------------------------------------------------------------------
-# 🔐 CONTROLE DE ADMINISTRADORES E GESTÃO DE USUÁRIOS APROVADOS
+# 🔐 CONTROLE DE ACESSOS, ADMINISTRADORES E USUÁRIOS
 # -----------------------------------------------------------------------------
-ADMINISTRADORES = [
+ADMINISTRADORES_NATIVOS = [
     "flavia.godoi@bks.com.br",
+    "marcio.akama@bks.com.br",
+    "leiko.akama@bks.com.br",
     "neto.duarte@bks.com.br",
     "thaina.oliveira@bks.com.br"
 ]
 
+USUARIOS_PADRAO_NATIVOS = [
+    "ariana.reis@bks.com.br",
+    "danielle.almeida@bks.com.br",
+    "carlos.alberto@bks.com.br",
+    "sheila.giopato@bks.com.br",
+    "giovanna.oliveira@bks.com.br",
+    "yuji.akama@bksre.com.br",
+    "seguros@bks.com.br"
+]
+
 ARQUIVO_USUARIOS = "usuarios_aprovados.csv"
 
-def carregar_emails_autorizados():
-    """Lê do arquivo local os e-mails liberados ou inicializa com a lista padrão."""
-    emails_padrao = [
-        "flavia.godoi@bks.com.br",
-        "neto.duarte@bks.com.br",
-        "thaina.oliveira@bks.com.br",
-        "operacao@bks.com.br",
-        "seguros@bks.com.br",
-        "carlosalberto@bks.com.br",
-        "laissilva@bks.com.br"
-    ]
-    
-    if not os.path.exists(ARQUIVO_USUARIOS):
-        salvar_emails_autorizados(emails_padrao)
-        return emails_padrao
+def carregar_usuarios():
+    """Carrega o dicionário de usuários com seus respectivos papéis ('admin' ou 'operador')."""
+    usuarios = {}
+    for adm in ADMINISTRADORES_NATIVOS:
+        usuarios[adm.lower()] = "admin"
+    for usr in USUARIOS_PADRAO_NATIVOS:
+        if usr.lower() not in usuarios:
+            usuarios[usr.lower()] = "operador"
 
-    emails = set([e.lower() for e in emails_padrao])
-    try:
-        with open(ARQUIVO_USUARIOS, mode='r', encoding='utf-8') as f:
-            reader = csv.reader(f)
-            for row in reader:
-                if row and row[0].strip():
-                    emails.add(row[0].strip().lower())
-    except Exception:
-        return emails_padrao
+    if os.path.exists(ARQUIVO_USUARIOS):
+        try:
+            with open(ARQUIVO_USUARIOS, mode='r', encoding='utf-8') as f:
+                reader = csv.reader(f, delimiter=';')
+                for row in reader:
+                    if row and len(row) >= 1 and row[0].strip():
+                        email = row[0].strip().lower()
+                        papel = row[1].strip().lower() if len(row) >= 2 else "operador"
+                        usuarios[email] = papel
+        except Exception:
+            pass
 
-    return list(emails)
+    return usuarios
 
-def salvar_emails_autorizados(lista_emails):
-    """Salva a lista atualizada de e-mails autorizados."""
+def salvar_usuarios_csv(dict_usuarios):
+    """Grava os usuários e papéis no CSV e sincroniza com o GitHub."""
     try:
         with open(ARQUIVO_USUARIOS, mode='w', encoding='utf-8', newline='') as f:
-            writer = csv.writer(f)
-            for email in set(lista_emails):
-                if email.strip():
-                    writer.writerow([email.strip().lower()])
-        sincronizar_com_github(ARQUIVO_USUARIOS, "Atualização de usuários autorizados via Painel PLD/FTP")
+            writer = csv.writer(f, delimiter=';')
+            for email, papel in dict_usuarios.items():
+                writer.writerow([email, papel])
+        sincronizar_com_github(ARQUIVO_USUARIOS, "Atualização da lista de usuários via Painel PLD/FTP")
     except Exception as e:
         st.error(f"Erro ao salvar lista de usuários: {e}")
 
-def adicionar_novo_usuario(novo_email):
-    """Adiciona um novo e-mail à lista de aprovados."""
-    email_clean = novo_email.strip().lower()
+def adicionar_novo_usuario(email_input, perfil_escolhido):
+    """Adiciona um novo e-mail com a permissão definida."""
+    email_clean = email_input.strip().lower()
     if not email_clean:
         return False, "O e-mail não pode estar em branco."
     
-    lista_atual = carregar_emails_autorizados()
-    if email_clean in lista_atual:
+    dict_atual = carregar_usuarios()
+    if email_clean in dict_atual:
         return False, "Este e-mail já está cadastrado!"
 
-    lista_atual.append(email_clean)
-    salvar_emails_autorizados(lista_atual)
-    return True, f"Usuário {email_clean} autorizado com sucesso!"
+    dict_atual[email_clean] = perfil_escolhido
+    salvar_usuarios_csv(dict_atual)
+    return True, f"Usuário {email_clean} ({perfil_escolhido.title()}) cadastrado com sucesso!"
 
 def remover_usuario(email_remover):
-    """Remove um e-mail da lista de aprovados."""
+    """Remove um usuário cadastrado com garantia de exclusão."""
     email_clean = email_remover.strip().lower()
-    lista_atual = carregar_emails_autorizados()
-    if email_clean in lista_atual:
-        lista_atual.remove(email_clean)
-        salvar_emails_autorizados(lista_atual)
-        return True, f"Acesso do e-mail {email_clean} revogado."
-    return False, "Usuário não encontrado."
+    dict_atual = carregar_usuarios()
+    
+    if email_clean in dict_atual:
+        del dict_atual[email_clean]
+        salvar_usuarios_csv(dict_atual)
+        return True, f"Acesso do e-mail {email_clean} revogado com sucesso."
+    return False, "Usuário não localizado."
 
 def verificar_email_autorizado(email: str) -> bool:
-    """Verifica se o e-mail possui permissão de acesso."""
+    """Verifica se o e-mail possui permissão de login no sistema."""
     if not email:
         return False
     email_clean = email.strip().lower()
-    lista_aprovados = carregar_emails_autorizados()
-    
-    if email_clean in lista_aprovados or email_clean.endswith("@bks.com.br"):
-        return True
-    return False
+    dict_usuarios = carregar_usuarios()
+    return email_clean in dict_usuarios or email_clean.endswith("@bks.com.br") or email_clean.endswith("@bksre.com.br")
+
+def eh_administrador(email: str) -> bool:
+    """Retorna True se o e-mail logado tiver privilégios administrativos."""
+    if not email:
+        return False
+    email_clean = email.strip().lower()
+    dict_usuarios = carregar_usuarios()
+    return dict_usuarios.get(email_clean) == "admin" or email_clean in [a.lower() for a in ADMINISTRADORES_NATIVOS]
 
 # -----------------------------------------------------------------------------
-# 🛠️ FUNÇÕES DE NORMALIZAÇÃO, VALIDAÇÃO DE CPF E BUSCAS (CGU + WEB)
+# 🛠️ FUNÇÕES DE FORMATAÇÃO ESTÉTICA, VALIDAÇÃO E BUSCAS (CGU + WEB)
 # -----------------------------------------------------------------------------
 ARQUIVO_VENCIMENTOS = "vencimentos.csv"
 
@@ -195,11 +207,7 @@ def identificar_arquivo_pep():
     return None
 
 def buscar_na_planilha_pep(nome_input, cpf_input):
-    """
-    Busca de alta precisão na planilha da CGU:
-    1. Compara o Nome Completo Normalizado.
-    2. Suporta verificação por miolo de CPF mesmo quando mascarado por LGPD.
-    """
+    """Busca de alta precisão na planilha da CGU."""
     caminho_final = identificar_arquivo_pep()
     if not caminho_final:
         return None
@@ -425,7 +433,7 @@ if not st.session_state.autenticado:
 # -----------------------------------------------------------------------------
 # 🛡️ BARRA LATERAL (SIDEBAR) & NAVEGAÇÃO
 # -----------------------------------------------------------------------------
-eh_admin = st.session_state.email_logado.strip().lower() in [adm.lower() for adm in ADMINISTRADORES]
+eh_admin = eh_administrador(st.session_state.email_logado)
 
 with st.sidebar:
     if os.path.exists("logo_bks.png"):
@@ -440,13 +448,11 @@ with st.sidebar:
     if eh_admin:
         st.markdown(f"📧 **Operador:** {st.session_state.email_logado}\n*(⭐ Administrador)*")
     else:
-        st.markdown(f"📧 **Operador:** {st.session_state.email_logado}")
+        st.markdown(f"📧 **Operador:** {st.session_state.email_logado}\n*(👤 Operador)*")
         
     st.markdown("---")
     
-    opcoes_menu = ["🔍 Consulta PLD/FTP", "📊 Gestão de Vencimentos"]
-    if eh_admin:
-        opcoes_menu.append("⚙️ Gerenciador de Usuários")
+    opcoes_menu = ["🔍 Consulta PLD/FTP", "📊 Gestão de Vencimentos", "⚙️ Gerenciador de Usuários"]
 
     opcao_menu = st.radio(
         "📌 Menu de Navegação:",
@@ -456,6 +462,7 @@ with st.sidebar:
     
     st.markdown("---")
     
+    # NOTIFICAÇÃO DE BASE DE DADOS (VISÍVEL PARA TODOS)
     arquivo_encontrado = identificar_arquivo_pep()
     if arquivo_encontrado:
         data_arquivo = datetime(2026, 8, 14)
@@ -463,7 +470,7 @@ with st.sidebar:
 
         if dias_desde_atualizacao > 30:
             st.warning(f"⚠️ **Base PEP Local:** Atualização Necessária!\n(Inclusão de {data_arquivo.strftime('%d/%m/%Y')} - há {dias_desde_atualizacao} dias)")
-            st.caption("💡 *Recomendado baixar a nova base no Portal da Transparência (CGU) e atualizar no GitHub.*")
+            st.caption("💡 *Aviso: Favor solicitar ao Administrador a atualização da base do Portal da Transparência (CGU).*")
         else:
             st.success("📁 **Base PEP Local:** Carregada e Ativa")
             st.caption(f"🗓️ *Inclusão da base: {data_arquivo.strftime('%d/%m/%Y')}*")
@@ -521,7 +528,6 @@ if opcao_menu == "🔍 Consulta PLD/FTP":
                 
                 nome_limpo = nome_input.strip()
                 
-                # 1ª CAMADA: BASE LOCAL CGU
                 match_planilha = buscar_na_planilha_pep(nome_limpo, cpf_input)
                 
                 if match_planilha:
@@ -531,7 +537,6 @@ if opcao_menu == "🔍 Consulta PLD/FTP":
                     orgao_detectado = match_planilha["orgao"]
                     detalhe_cargo = "Cadastro Ativo na Base Oficial do Governo Federal (CGU)"
                 else:
-                    # 2ª CAMADA: VARREDURA WEB (WIKIPÉDIA + DUCKDUCKGO)
                     origem_identificacao = "Pesquisa em Portais Públicos e Notícias Web"
                     
                     wiki_text = buscar_wikipedia(nome_limpo)
@@ -950,64 +955,69 @@ elif opcao_menu == "📊 Gestão de Vencimentos":
                         st.rerun()
                 st.divider()
 
-        st.markdown("<br>", unsafe_allow_html=True)
+        # BOTÃO DE EXPORTAÇÃO EXCLUSIVO PARA ADMINISTRADORES
+        if eh_admin:
+            st.markdown("<br>", unsafe_allow_html=True)
+            csv_buffer = io.StringIO()
+            campos = ["Nome Completo", "CPF", "Status PEP", "Data de Emissão", "Data de Vencimento", "Status do Prazo", "Operador"]
+            writer = csv.DictWriter(csv_buffer, fieldnames=campos, delimiter=';')
+            writer.writeheader()
+            
+            dados_excel = []
+            for d in (dados_filtrados if dados_filtrados else dados_processados):
+                row_e = {
+                    "Nome Completo": d["Nome Completo"],
+                    "CPF": d["CPF_Excel"],
+                    "Status PEP": d["Status PEP"],
+                    "Data de Emissão": d["Data de Emissão"],
+                    "Data de Vencimento": d["Data de Vencimento"],
+                    "Status do Prazo": d["Status do Prazo"],
+                    "Operador": d["Operador"]
+                }
+                dados_excel.append(row_e)
 
-        csv_buffer = io.StringIO()
-        campos = ["Nome Completo", "CPF", "Status PEP", "Data de Emissão", "Data de Vencimento", "Status do Prazo", "Operador"]
-        writer = csv.DictWriter(csv_buffer, fieldnames=campos, delimiter=';')
-        writer.writeheader()
-        
-        dados_excel = []
-        for d in (dados_filtrados if dados_filtrados else dados_processados):
-            row_e = {
-                "Nome Completo": d["Nome Completo"],
-                "CPF": d["CPF_Excel"],
-                "Status PEP": d["Status PEP"],
-                "Data de Emissão": d["Data de Emissão"],
-                "Data de Vencimento": d["Data de Vencimento"],
-                "Status do Prazo": d["Status do Prazo"],
-                "Operador": d["Operador"]
-            }
-            dados_excel.append(row_e)
+            writer.writerows(dados_excel)
 
-        writer.writerows(dados_excel)
-
-        st.download_button(
-            label="📥 Exportar Lista em Colunas (.CSV para Excel)",
-            data=csv_buffer.getvalue().encode('utf-8-sig'),
-            file_name=f"Controle_Vencimentos_PLD_BKS_{datetime.now().strftime('%Y%m%d')}.csv",
-            mime="text/csv",
-            use_container_width=True
-        )
+            st.download_button(
+                label="📥 Exportar Lista em Colunas (.CSV para Excel)",
+                data=csv_buffer.getvalue().encode('utf-8-sig'),
+                file_name=f"Controle_Vencimentos_PLD_BKS_{datetime.now().strftime('%Y%m%d')}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
 
 # =============================================================================
-# ⚙️ TELA 3: GERENCIADOR DE USUÁRIOS (EXCLUSIVO PARA ADMINISTRADORES)
+# ⚙️ TELA 3: GERENCIADOR DE USUÁRIOS E PERMISSÕES
 # =============================================================================
-elif opcao_menu == "⚙️ Gerenciador de Usuários" and eh_admin:
+elif opcao_menu == "⚙️ Gerenciador de Usuários":
     st.title("⚙️ Gerenciador de Usuários Aprovados")
-    st.caption("Painel administrativo para conceder ou revogar acessos de operadores à plataforma.")
+    st.caption("Painel administrativo para controle de acessos e permissões dos operadores.")
     st.markdown("<br>", unsafe_allow_html=True)
 
-    col_add1, col_add2 = st.columns([3, 1])
-    with col_add1:
-        novo_email_input = st.text_input("➕ Digite o novo e-mail para autorizar acesso:", placeholder="novo.operador@bks.com.br")
-    with col_add2:
-        st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("✅ Autorizar Usuário", use_container_width=True):
-            sucesso, msg = adicionar_novo_usuario(novo_email_input)
-            if sucesso:
-                st.success(msg)
-                st.rerun()
-            else:
-                st.warning(msg)
+    # FORMULÁRIO DE INCLUSÃO (EXCLUSIVO PARA ADMINS)
+    if eh_admin:
+        col_add1, col_add2, col_add3 = st.columns([2.5, 1.2, 1])
+        with col_add1:
+            novo_email_input = st.text_input("➕ Digite o e-mail para autorizar:", placeholder="novo.usuario@bks.com.br")
+        with col_add2:
+            perfil_input = st.selectbox("Nível de Acesso:", ["operador", "admin"])
+        with col_add3:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("✅ Autorizar", use_container_width=True):
+                sucesso, msg = adicionar_novo_usuario(novo_email_input, perfil_input)
+                if sucesso:
+                    st.success(msg)
+                    st.rerun()
+                else:
+                    st.warning(msg)
+        st.markdown("---")
 
-    st.markdown("---")
     st.subheader("📋 Lista de Usuários com Acesso Liberado")
 
-    lista_usuarios = carregar_emails_autorizados()
+    dict_usuarios = carregar_usuarios()
 
-    if not lista_usuarios:
-        st.info("Nenhum usuário cadastrado além dos e-mails padrão.")
+    if not dict_usuarios:
+        st.info("Nenhum usuário cadastrado.")
     else:
         col_u_head1, col_u_head2, col_u_head3 = st.columns([3, 2, 1])
         with col_u_head1:
@@ -1018,26 +1028,28 @@ elif opcao_menu == "⚙️ Gerenciador de Usuários" and eh_admin:
             st.markdown("**Ação**")
         st.markdown("---")
 
-        admins_lower = [a.lower() for a in ADMINISTRADORES]
-
-        for idx, usr in enumerate(lista_usuarios):
+        for idx, (usr_email, papel) in enumerate(sorted(dict_usuarios.items())):
             c_u1, c_u2, c_u3 = st.columns([3, 2, 1])
             with c_u1:
-                st.write(f"**{usr}**")
+                st.write(f"**{usr_email}**")
             with c_u2:
-                if usr.lower() in admins_lower:
+                if papel == "admin":
                     st.write("⭐ Administrador")
                 else:
                     st.write("👤 Operador")
             with c_u3:
-                if usr.lower() in admins_lower:
-                    st.caption("Protegido")
+                # SOMENTE ADMIN PODE DELETAR (E NÃO PODE DELETAR SI MESMO)
+                if eh_admin:
+                    if usr_email.lower() == st.session_state.email_logado.strip().lower():
+                        st.caption("Você")
+                    else:
+                        if st.button("🗑️ Revogar", key=f"btn_delete_user_{usr_email}_{idx}"):
+                            ok, msg_del = remover_usuario(usr_email)
+                            if ok:
+                                st.success(msg_del)
+                                st.rerun()
+                            else:
+                                st.error(msg_del)
                 else:
-                    if st.button("🗑️ Revogar", key=f"btn_del_usr_{idx}"):
-                        ok, m = remover_usuario(usr)
-                        if ok:
-                            st.success(m)
-                            st.rerun()
-                        else:
-                            st.error(m)
+                    st.caption("🔒 Leitura")
             st.divider()
