@@ -4,6 +4,13 @@ from datetime import datetime, timezone, timedelta
 from PIL import Image as PILImage
 from ddgs import DDGS
 
+# Importa PyGithub com proteção contra ausência de chave
+try:
+    from github import Github
+    GITHUB_DISPONIVEL = True
+except ImportError:
+    GITHUB_DISPONIVEL = False
+
 # ReportLab - Gerador Vetorial Profissional de PDF
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
@@ -12,7 +19,34 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 
 # -----------------------------------------------------------------------------
-# 🔐 CONTROLE DE ADMINISTRADORES E GESTÃO DINÂMICA DE USUÁRIOS APROVADOS
+# ☁️ SINCRONIZAÇÃO SILENCIOSA COM GITHUB (PERSISTÊNCIA EM NUVEM)
+# -----------------------------------------------------------------------------
+def sincronizar_com_github(caminho_arquivo, mensagem_commit):
+    """Sincroniza os arquivos locais de controle com o repositório GitHub."""
+    if not GITHUB_DISPONIVEL:
+        return
+    try:
+        if "GITHUB_TOKEN" in st.secrets and "GITHUB_REPO" in st.secrets:
+            token = st.secrets["GITHUB_TOKEN"]
+            repo_nome = st.secrets["GITHUB_REPO"]
+            if token and repo_nome:
+                g = Github(token)
+                repo = g.get_repo(repo_nome)
+
+                if os.path.exists(caminho_arquivo):
+                    with open(caminho_arquivo, mode='r', encoding='utf-8-sig', errors='ignore') as f:
+                        conteudo_local = f.read()
+
+                    try:
+                        conteudo_remoto = repo.get_contents(caminho_arquivo)
+                        repo.update_file(caminho_arquivo, mensagem_commit, conteudo_local, conteudo_remoto.sha)
+                    except Exception:
+                        repo.create_file(caminho_arquivo, mensagem_commit, conteudo_local)
+    except Exception:
+        pass
+
+# -----------------------------------------------------------------------------
+# 🔐 CONTROLE DE ADMINISTRADORES E GESTÃO DE USUÁRIOS APROVADOS
 # -----------------------------------------------------------------------------
 ADMINISTRADORES = [
     "flavia.godoi@bks.com.br",
@@ -28,14 +62,17 @@ def carregar_emails_autorizados():
         "flavia.godoi@bks.com.br",
         "neto.duarte@bks.com.br",
         "thaina.oliveira@bks.com.br",
-
+        "operacao@bks.com.br",
+        "seguros@bks.com.br",
+        "carlosalberto@bks.com.br",
+        "laissilva@bks.com.br"
     ]
     
     if not os.path.exists(ARQUIVO_USUARIOS):
         salvar_emails_autorizados(emails_padrao)
         return emails_padrao
 
-    emails = set(emails_padrao)
+    emails = set([e.lower() for e in emails_padrao])
     try:
         with open(ARQUIVO_USUARIOS, mode='r', encoding='utf-8') as f:
             reader = csv.reader(f)
@@ -48,13 +85,14 @@ def carregar_emails_autorizados():
     return list(emails)
 
 def salvar_emails_autorizados(lista_emails):
-    """Salva a lista atualizada de e-mails autorizados no arquivo local."""
+    """Salva a lista atualizada de e-mails autorizados."""
     try:
         with open(ARQUIVO_USUARIOS, mode='w', encoding='utf-8', newline='') as f:
             writer = csv.writer(f)
             for email in set(lista_emails):
                 if email.strip():
                     writer.writerow([email.strip().lower()])
+        sincronizar_com_github(ARQUIVO_USUARIOS, "Atualização de usuários autorizados via Painel PLD/FTP")
     except Exception as e:
         st.error(f"Erro ao salvar lista de usuários: {e}")
 
@@ -94,7 +132,7 @@ def verificar_email_autorizado(email: str) -> bool:
     return False
 
 # -----------------------------------------------------------------------------
-# 🛠️ FUNÇÕES DE FORMATAÇÃO ESTÉTICA, GESTÃO DE VENCIMENTOS E BASE LOCAL
+# 🛠️ FUNÇÕES DE NORMALIZAÇÃO, VALIDAÇÃO DE CPF E BUSCAS (CGU + WEB)
 # -----------------------------------------------------------------------------
 ARQUIVO_VENCIMENTOS = "vencimentos.csv"
 
@@ -112,9 +150,165 @@ def mascarar_cpf(cpf_raw: str) -> str:
         return f"{nums[:3]}.***.***-{nums[9:]}"
     return "***.***.***-**"
 
+def normalizar_texto(txt):
+    """Remove acentos, caracteres especiais e converte para caixa baixa."""
+    if not txt:
+        return ""
+    nfkd = unicodedata.normalize('NFD', str(txt))
+    sem_acento = "".join([c for c in nfkd if not unicodedata.combining(c)])
+    limpo = re.sub(r'[^a-zA-Z0-9\s]', ' ', sem_acento).lower()
+    return " ".join(limpo.split())
+
+def validar_cpf(cpf: str) -> bool:
+    """Valida os dígitos verificadores do CPF (Módulo 11)."""
+    cpf_limpo = re.sub(r'\D', '', str(cpf))
+    
+    if len(cpf_limpo) != 11 or cpf_limpo == cpf_limpo[0] * 11:
+        return False
+    
+    soma = sum(int(cpf_limpo[i]) * (10 - i) for i in range(9))
+    resto = (soma * 10) % 11
+    digito_1 = 0 if resto == 10 else resto
+    if digito_1 != int(cpf_limpo[9]):
+        return False
+        
+    soma = sum(int(cpf_limpo[i]) * (11 - i) for i in range(10))
+    resto = (soma * 10) % 11
+    digito_2 = 0 if resto == 10 else resto
+    if digito_2 != int(cpf_limpo[10]):
+        return False
+        
+    return True
+
+def identificar_arquivo_pep():
+    """Localiza o arquivo da planilha de PEPs no diretório local."""
+    for arq in ["pep_oficial.csv", "pep_oficial.txt", "pep_oficial.csv.csv", "PEP_OFICIAL.csv", "PEP_OFICIAL.txt"]:
+        if os.path.exists(arq):
+            return arq
+    try:
+        for arq in os.listdir("."):
+            nome_baixo = arq.lower()
+            if "pep" in nome_baixo and (nome_baixo.endswith(".csv") or nome_baixo.endswith(".txt")):
+                return arq
+    except Exception:
+        pass
+    return None
+
+def buscar_na_planilha_pep(nome_input, cpf_input):
+    """
+    Busca de alta precisão na planilha da CGU:
+    1. Compara o Nome Completo Normalizado.
+    2. Suporta verificação por miolo de CPF mesmo quando mascarado por LGPD.
+    """
+    caminho_final = identificar_arquivo_pep()
+    if not caminho_final:
+        return None
+
+    nome_norm = normalizar_texto(nome_input)
+    if not nome_norm or len(nome_norm.split()) < 2:
+        return None
+
+    cpf_numeros = re.sub(r'\D', '', str(cpf_input))
+    miolo_cpf_input = cpf_numeros[3:9] if len(cpf_numeros) == 11 else ""
+
+    try:
+        with open(caminho_final, mode='r', encoding='utf-8', errors='ignore') as f:
+            primeira_linha = f.readline()
+            sep = ';' if ';' in primeira_linha else (',' if ',' in primeira_linha else '\t')
+            f.seek(0)
+
+            reader = csv.DictReader(f, delimiter=sep)
+            for row in reader:
+                # Mapeia colunas dinamicamente para lidar com variações do Portal da Transparência
+                nome_pep_row = (row.get('Nome_PEP') or row.get('NOME_PEP') or 
+                                row.get('Nome') or row.get('NOME') or row.get('Nome_Pessoa') or "")
+                
+                nome_pep_norm = normalizar_texto(nome_pep_row)
+
+                if nome_norm == nome_pep_norm:
+                    cpf_row = (row.get('CPF') or row.get('Cpf') or row.get('CPF_PEP') or 
+                               row.get('CPF_PESSOA') or row.get('Cpf_Pessoa') or "")
+                    
+                    cpf_row_numeros = re.sub(r'\D', '', cpf_row)
+
+                    # Se a linha tiver os números do miolo (6 dígitos centrais visíveis), valida contra homônimos
+                    if miolo_cpf_input and len(cpf_row_numeros) >= 6:
+                        if miolo_cpf_input not in cpf_row_numeros:
+                            # Caso os miolos não coincidam, pula para evitar falso positivo por homônimo
+                            continue
+
+                    cargo = (row.get('Descrição_Função') or row.get('DESCRICAO_FUNCAO') or 
+                             row.get('DS_FUNCAO') or row.get('Função') or row.get('Cargo') or "Agente Político / Função Pública")
+                    
+                    orgao = (row.get('Nome_Órgão') or row.get('NOME_ORGAO') or 
+                             row.get('Órgão') or row.get('Orgao') or row.get('ORGAO_LOTACAO') or "Administração Pública (CGU)")
+
+                    return {
+                        "cargo": str(cargo).strip(),
+                        "orgao": str(orgao).strip(),
+                        "detalhe": f"Registro Oficial na Base da CGU ({caminho_final})"
+                    }
+    except Exception:
+        pass
+
+    return None
+
+def buscar_wikipedia(nome):
+    """Busca resumo do pesquisado na Wikipédia em Português."""
+    try:
+        url = "https://pt.wikipedia.org/w/api.php"
+        params = {
+            "action": "query",
+            "format": "json",
+            "prop": "extracts",
+            "exintro": True,
+            "explaintext": True,
+            "titles": nome
+        }
+        res = requests.get(url, params=params, timeout=4).json()
+        pages = res.get("query", {}).get("pages", {})
+        for page_id, page_data in pages.items():
+            if page_id != "-1":
+                return page_data.get("extract", "")
+    except Exception:
+        pass
+    return ""
+
+def analisar_proximidade_cargo(texto_bruto, nome_pesquisado):
+    """
+    Analisa se o nome aparece vinculado a um cargo público/político 
+    em um contexto próximo de até 250 caracteres.
+    """
+    texto_norm = normalizar_texto(texto_bruto)
+    nome_norm = normalizar_texto(nome_pesquisado)
+
+    if nome_norm not in texto_norm:
+        return None
+
+    cargos_pep = [
+        "senador", "senadora", "deputado", "deputada", "governador", "governadora", 
+        "prefeito", "prefeita", "ministro", "ministra", "desembargador", "desembargadora", 
+        "juiz", "juiza", "juiz federal", "procurador", "procuradora", "secretario", 
+        "secretaria", "vereador", "vereadora", "magistrado", "magistrada", "parlamentar", 
+        "ex ministro", "ex senador", "ex deputado", "ex governador", "ex prefeito", "politico", "politica"
+    ]
+
+    indices_nome = [m.start() for m in re.finditer(re.escape(nome_norm), texto_norm)]
+
+    for idx in indices_nome:
+        inicio_janela = max(0, idx - 250)
+        fim_janela = min(len(texto_norm), idx + len(nome_norm) + 250)
+        trecho = texto_norm[inicio_janela:fim_janela]
+
+        for cargo in cargos_pep:
+            if cargo in trecho:
+                return cargo.title()
+
+    return None
+
 def registrar_vencimento(nome, cpf_raw, email_operador, status_pep, data_emissao_dt, data_vencimento_str):
-    """Grava ou ATUALIZA o histórico do relatório gerado sem duplicidade."""
-    cpf_limpo_key = re.sub(r'\D', '', cpf_raw)
+    """Grava ou atualiza a listagem de relatórios sem duplicidades."""
+    cpf_limpo_key = re.sub(r'\D', '', str(cpf_raw))
     cpf_formatado = formatar_cpf_estetico(cpf_raw)
     cpf_mascarado = mascarar_cpf(cpf_raw)
     registros_existentes = carregar_vencimentos()
@@ -157,6 +351,8 @@ def registrar_vencimento(nome, cpf_raw, email_operador, status_pep, data_emissao
             for r in novos_registros:
                 r_line = {k: r.get(k, "") for k in campos}
                 writer.writerow(r_line)
+        
+        sincronizar_com_github(ARQUIVO_VENCIMENTOS, f"Atualização de relatório: {nome.upper().strip()}")
     except Exception as e:
         st.error(f"Erro ao salvar registro de vencimento: {e}")
 
@@ -177,145 +373,6 @@ def carregar_vencimentos():
     except Exception:
         pass
     return registros
-
-def normalizar_texto(txt):
-    """Remove acentos, caracteres especiais e converte para caixa baixa e espaços simples."""
-    if not txt:
-        return ""
-    nfkd = unicodedata.normalize('NFD', str(txt))
-    sem_acento = "".join([c for c in nfkd if not unicodedata.combining(c)])
-    limpo = re.sub(r'[^a-zA-Z0-9\s]', ' ', sem_acento).lower()
-    return " ".join(limpo.split())
-
-def validar_cpf(cpf: str) -> bool:
-    """Valida o cálculo dos dígitos verificadores do CPF (Módulo 11)."""
-    cpf_limpo = re.sub(r'\D', '', str(cpf))
-    
-    if len(cpf_limpo) != 11 or cpf_limpo == cpf_limpo[0] * 11:
-        return False
-    
-    soma = sum(int(cpf_limpo[i]) * (10 - i) for i in range(9))
-    resto = (soma * 10) % 11
-    digito_1 = 0 if resto == 10 else resto
-    if digito_1 != int(cpf_limpo[9]):
-        return False
-        
-    soma = sum(int(cpf_limpo[i]) * (11 - i) for i in range(10))
-    resto = (soma * 10) % 11
-    digito_2 = 0 if resto == 10 else resto
-    if digito_2 != int(cpf_limpo[10]):
-        return False
-        
-    return True
-
-def identificar_arquivo_pep():
-    """Localiza o arquivo da planilha de PEPs no diretório."""
-    for arq in ["pep_oficial.csv", "pep_oficial.txt", "pep_oficial.csv.csv", "PEP_OFICIAL.csv", "PEP_OFICIAL.txt"]:
-        if os.path.exists(arq):
-            return arq
-    try:
-        for arq in os.listdir("."):
-            nome_baixo = arq.lower()
-            if "pep" in nome_baixo and (nome_baixo.endswith(".csv") or nome_baixo.endswith(".txt")):
-                return arq
-    except Exception:
-        pass
-    return None
-
-def buscar_na_planilha_pep(nome_input, cpf_input):
-    """Busca flexível na planilha oficial da CGU."""
-    caminho_final = identificar_arquivo_pep()
-    if not caminho_final:
-        return None
-
-    nome_norm = normalizar_texto(nome_input)
-    if not nome_norm or len(nome_norm.split()) < 2:
-        return None
-
-    cpf_numeros = re.sub(r'\D', '', cpf_input)
-    miolo_cpf = cpf_numeros[3:9] if len(cpf_numeros) == 11 else ""
-
-    try:
-        with open(caminho_final, mode='r', encoding='utf-8', errors='ignore') as f:
-            primeira_linha = f.readline()
-            sep = ';' if ';' in primeira_linha else (',' if ',' in primeira_linha else '\t')
-            f.seek(0)
-
-            reader = csv.DictReader(f, delimiter=sep)
-            for row in reader:
-                nome_pep_row = row.get('Nome_PEP') or row.get('NOME_PEP') or row.get('Nome') or row.get('NOME') or ""
-                nome_pep_norm = normalizar_texto(nome_pep_row)
-
-                if nome_norm == nome_pep_norm:
-                    cpf_row = row.get('CPF') or row.get('Cpf') or row.get('CPF_PEP') or ""
-                    cpf_row_numeros = re.sub(r'\D', '', cpf_row)
-
-                    if miolo_cpf and cpf_row_numeros and len(cpf_row_numeros) == 11:
-                        if miolo_cpf != cpf_row_numeros[3:9]:
-                            continue
-
-                    cargo = row.get('Descrição_Função') or row.get('DESCRICAO_FUNCAO') or row.get('Função') or row.get('Cargo') or "Agente Político / Função Pública"
-                    orgao = row.get('Nome_Órgão') or row.get('NOME_ORGAO') or row.get('Órgão') or row.get('Orgao') or "Administração Pública (CGU)"
-
-                    return {
-                        "cargo": cargo.strip(),
-                        "orgao": orgao.strip(),
-                        "detalhe": f"Registro Oficial na Base da CGU ({caminho_final})"
-                    }
-    except Exception:
-        pass
-
-    return None
-
-def buscar_wikipedia(nome):
-    """Busca resumo da autoridade na Wikipédia em Português."""
-    try:
-        url = "https://pt.wikipedia.org/w/api.php"
-        params = {
-            "action": "query",
-            "format": "json",
-            "prop": "extracts",
-            "exintro": True,
-            "explaintext": True,
-            "titles": nome
-        }
-        res = requests.get(url, params=params, timeout=4).json()
-        pages = res.get("query", {}).get("pages", {})
-        for page_id, page_data in pages.items():
-            if page_id != "-1":
-                return page_data.get("extract", "")
-    except Exception:
-        pass
-    return ""
-
-def analisar_proximidade_cargo(texto_bruto, nome_pesquisado):
-    """Analisa se o nome pesquisado aparece vinculado a um cargo público relevante."""
-    texto_norm = normalizar_texto(texto_bruto)
-    nome_norm = normalizar_texto(nome_pesquisado)
-
-    if nome_norm not in texto_norm:
-        return None
-
-    cargos_pep = [
-        "senador", "senadora", "deputado", "deputada", "governador", "governadora", 
-        "prefeito", "prefeita", "ministro", "ministra", "desembargador", "desembargadora", 
-        "juiz", "juiza", "juiz federal", "procurador", "procuradora", "secretario", 
-        "secretaria", "vereador", "vereadora", "magistrado", "magistrada", "parlamentar", 
-        "ex ministro", "ex senador", "ex deputado", "ex governador", "ex prefeito", "politico", "politica"
-    ]
-
-    indices_nome = [m.start() for m in re.finditer(re.escape(nome_norm), texto_norm)]
-
-    for idx in indices_nome:
-        inicio_janela = max(0, idx - 250)
-        fim_janela = min(len(texto_norm), idx + len(nome_norm) + 250)
-        trecho = texto_norm[inicio_janela:fim_janela]
-
-        for cargo in cargos_pep:
-            if cargo in trecho:
-                return cargo.title()
-
-    return None
 
 # -----------------------------------------------------------------------------
 # 🔑 CONFIGURAÇÃO DE ACESSO E AUTENTICAÇÃO
@@ -470,6 +527,7 @@ if opcao_menu == "🔍 Consulta PLD/FTP":
                 
                 nome_limpo = nome_input.strip()
                 
+                # 1ª CAMADA: BASE LOCAL CGU
                 match_planilha = buscar_na_planilha_pep(nome_limpo, cpf_input)
                 
                 if match_planilha:
@@ -479,6 +537,7 @@ if opcao_menu == "🔍 Consulta PLD/FTP":
                     orgao_detectado = match_planilha["orgao"]
                     detalhe_cargo = "Cadastro Ativo na Base Oficial do Governo Federal (CGU)"
                 else:
+                    # 2ª CAMADA: VARREDURA WEB (WIKIPÉDIA + DUCKDUCKGO)
                     origem_identificacao = "Pesquisa em Portais Públicos e Notícias Web"
                     
                     wiki_text = buscar_wikipedia(nome_limpo)
