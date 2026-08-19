@@ -2,9 +2,9 @@ import streamlit as st
 import io, os, re, unicodedata, requests, csv
 from datetime import datetime, timezone, timedelta
 from PIL import Image as PILImage
-from ddgs import DDGS
+from duckduckgo_search import DDGS
 
-# Importa PyGithub com proteção contra ausência de chave
+# Importa PyGithub de forma segura
 try:
     from github import Github
     GITHUB_DISPONIVEL = True
@@ -195,7 +195,11 @@ def identificar_arquivo_pep():
     return None
 
 def buscar_na_planilha_pep(nome_input, cpf_input):
-    """Busca na planilha oficial da CGU."""
+    """
+    Busca de alta precisão na planilha da CGU:
+    1. Compara o Nome Completo Normalizado.
+    2. Suporta verificação por miolo de CPF mesmo quando mascarado por LGPD.
+    """
     caminho_final = identificar_arquivo_pep()
     if not caminho_final:
         return None
@@ -517,6 +521,7 @@ if opcao_menu == "🔍 Consulta PLD/FTP":
                 
                 nome_limpo = nome_input.strip()
                 
+                # 1ª CAMADA: BASE LOCAL CGU
                 match_planilha = buscar_na_planilha_pep(nome_limpo, cpf_input)
                 
                 if match_planilha:
@@ -526,6 +531,7 @@ if opcao_menu == "🔍 Consulta PLD/FTP":
                     orgao_detectado = match_planilha["orgao"]
                     detalhe_cargo = "Cadastro Ativo na Base Oficial do Governo Federal (CGU)"
                 else:
+                    # 2ª CAMADA: VARREDURA WEB (WIKIPÉDIA + DUCKDUCKGO)
                     origem_identificacao = "Pesquisa em Portais Públicos e Notícias Web"
                     
                     wiki_text = buscar_wikipedia(nome_limpo)
