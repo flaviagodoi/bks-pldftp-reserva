@@ -195,11 +195,7 @@ def identificar_arquivo_pep():
     return None
 
 def buscar_na_planilha_pep(nome_input, cpf_input):
-    """
-    Busca de alta precisão na planilha da CGU:
-    1. Compara o Nome Completo Normalizado.
-    2. Suporta verificação por miolo de CPF mesmo quando mascarado por LGPD.
-    """
+    """Busca na planilha oficial da CGU."""
     caminho_final = identificar_arquivo_pep()
     if not caminho_final:
         return None
@@ -219,7 +215,6 @@ def buscar_na_planilha_pep(nome_input, cpf_input):
 
             reader = csv.DictReader(f, delimiter=sep)
             for row in reader:
-                # Mapeia colunas dinamicamente para lidar com variações do Portal da Transparência
                 nome_pep_row = (row.get('Nome_PEP') or row.get('NOME_PEP') or 
                                 row.get('Nome') or row.get('NOME') or row.get('Nome_Pessoa') or "")
                 
@@ -231,10 +226,8 @@ def buscar_na_planilha_pep(nome_input, cpf_input):
                     
                     cpf_row_numeros = re.sub(r'\D', '', cpf_row)
 
-                    # Se a linha tiver os números do miolo (6 dígitos centrais visíveis), valida contra homônimos
                     if miolo_cpf_input and len(cpf_row_numeros) >= 6:
                         if miolo_cpf_input not in cpf_row_numeros:
-                            # Caso os miolos não coincidam, pula para evitar falso positivo por homônimo
                             continue
 
                     cargo = (row.get('Descrição_Função') or row.get('DESCRICAO_FUNCAO') or 
@@ -275,10 +268,7 @@ def buscar_wikipedia(nome):
     return ""
 
 def analisar_proximidade_cargo(texto_bruto, nome_pesquisado):
-    """
-    Analisa se o nome aparece vinculado a um cargo público/político 
-    em um contexto próximo de até 250 caracteres.
-    """
+    """Analisa vinculação a cargo público no raio de 250 caracteres."""
     texto_norm = normalizar_texto(texto_bruto)
     nome_norm = normalizar_texto(nome_pesquisado)
 
@@ -527,7 +517,6 @@ if opcao_menu == "🔍 Consulta PLD/FTP":
                 
                 nome_limpo = nome_input.strip()
                 
-                # 1ª CAMADA: BASE LOCAL CGU
                 match_planilha = buscar_na_planilha_pep(nome_limpo, cpf_input)
                 
                 if match_planilha:
@@ -537,7 +526,6 @@ if opcao_menu == "🔍 Consulta PLD/FTP":
                     orgao_detectado = match_planilha["orgao"]
                     detalhe_cargo = "Cadastro Ativo na Base Oficial do Governo Federal (CGU)"
                 else:
-                    # 2ª CAMADA: VARREDURA WEB (WIKIPÉDIA + DUCKDUCKGO)
                     origem_identificacao = "Pesquisa em Portais Públicos e Notícias Web"
                     
                     wiki_text = buscar_wikipedia(nome_limpo)
