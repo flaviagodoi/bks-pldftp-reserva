@@ -3,4 +3,5 @@ requests
 Pillow
 duckduckgo-search
 reportlab
-PyGithub
+psycopg2-binary
+SQLAlchemy
