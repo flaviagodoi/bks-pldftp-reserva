@@ -4,6 +4,7 @@ from datetime import datetime, timezone, timedelta
 from PIL import Image as PILImage
 from duckduckgo_search import DDGS
 from sqlalchemy import create_engine, text
+from sqlalchemy.pool import NullPool
 
 # ReportLab - Gerador Vetorial Profissional de PDF
 from reportlab.lib.pagesizes import A4
@@ -16,13 +17,12 @@ from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 # 🗄️ CONEXÃO NATIVA E PERMANENTE COM BANCO SUPABASE (POSTGRESQL)
 # -----------------------------------------------------------------------------
 def obter_conexao_banco():
-    """Retorna a engine de conexão do SQLAlchemy para o Supabase."""
+    """Retorna a engine de conexão do SQLAlchemy para o Supabase sem prender pool."""
     if "DATABASE_URL" in st.secrets:
         db_url = st.secrets["DATABASE_URL"]
-        # Ajuste de prefixo do SQLAlchemy para Postgres
         if db_url.startswith("postgres://"):
             db_url = db_url.replace("postgres://", "postgresql://", 1)
-        return create_engine(db_url, pool_pre_ping=True)
+        return create_engine(db_url, poolclass=NullPool)
     return None
 
 def inicializar_banco_supabase():
@@ -275,7 +275,7 @@ def carregar_vencimentos():
     return registros
 
 # -----------------------------------------------------------------------------
-# 🛠️ FUNÇÕES DE BUSCA (CGU + WIKIPÉDIA + WEB)
+# 🛠️ MOCAMISMO DE BUSCA AVANÇADO (CGU + WIKIPÉDIA SEARCH API + WEB FALLBACK)
 # -----------------------------------------------------------------------------
 def identificar_arquivo_pep():
     """Localiza o arquivo da planilha de PEPs no diretório local."""
@@ -292,7 +292,9 @@ def identificar_arquivo_pep():
     return None
 
 def buscar_na_planilha_pep(nome_input, cpf_input):
-    """Busca de alta precisão na planilha da CGU."""
+    """
+    Busca estrita na planilha da CGU (1ª Camada) utilizando NOME COMPLETO EXATO e miolo do CPF.
+    """
     caminho_final = identificar_arquivo_pep()
     if not caminho_final:
         return None
@@ -343,53 +345,101 @@ def buscar_na_planilha_pep(nome_input, cpf_input):
 
     return None
 
-def buscar_wikipedia(nome):
-    """Busca resumo do pesquisado na Wikipédia em Português."""
+def buscar_web_robusta(nome):
+    """
+    Compila dados da Wikipédia (via API de Busca Textual Ampla) e portais públicos sem risco de bloqueio de IP.
+    """
+    texto_compilado = ""
+    
+    # 1. API de Busca Textual na Wikipédia (Ilimitada e sem bloqueio no Streamlit Cloud)
     try:
-        url = "https://pt.wikipedia.org/w/api.php"
-        params = {
+        url_wiki = "https://pt.wikipedia.org/w/api.php"
+        params_search = {
             "action": "query",
-            "format": "json",
-            "prop": "extracts",
-            "exintro": True,
-            "explaintext": True,
-            "titles": nome
+            "list": "search",
+            "srsearch": f'"{nome}"',
+            "format": "json"
         }
-        res = requests.get(url, params=params, timeout=4).json()
-        pages = res.get("query", {}).get("pages", {})
-        for page_id, page_data in pages.items():
-            if page_id != "-1":
-                return page_data.get("extract", "")
+        res = requests.get(url_wiki, params=params_search, timeout=5).json()
+        search_hits = res.get("query", {}).get("search", [])
+        
+        for hit in search_hits[:3]:
+            texto_compilado += f" {hit.get('title', '')} {hit.get('snippet', '')}"
+            
+        if search_hits:
+            primeiro_titulo = search_hits[0].get("title")
+            params_ext = {
+                "action": "query",
+                "format": "json",
+                "prop": "extracts",
+                "exintro": True,
+                "explaintext": True,
+                "titles": primeiro_titulo
+            }
+            res_ext = requests.get(url_wiki, params=params_ext, timeout=5).json()
+            pages = res_ext.get("query", {}).get("pages", {})
+            for p_id, p_data in pages.items():
+                if p_id != "-1":
+                    texto_compilado += f" {p_data.get('extract', '')}"
     except Exception:
         pass
-    return ""
+
+    # 2. DuckDuckGo HTML Scraping (Fallback para Portais Noticiosos)
+    try:
+        url_ddg = "https://html.duckduckgo.com/html/"
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        data = {"q": f'"{nome}" politico OR prefeito OR senador OR vice OR deputado'}
+        resp = requests.post(url_ddg, data=data, headers=headers, timeout=5)
+        if resp.status_code == 200:
+            texto_limpo = re.sub(r'<[^>]+>', ' ', resp.text)
+            texto_compilado += f" {texto_limpo}"
+    except Exception:
+        pass
+
+    # 3. DuckDuckGo API Library (Contingência Adicional)
+    try:
+        with DDGS() as ddgs:
+            results = list(ddgs.text(f'"{nome}" politico OR vice prefeito OR senador', max_results=4))
+            for r in results:
+                texto_compilado += f" {r.get('title', '')} {r.get('body', '')}"
+    except Exception:
+        pass
+
+    return texto_compilado
 
 def analisar_proximidade_cargo(texto_bruto, nome_pesquisado):
-    """Analisa vinculação a cargo público no raio de 250 caracteres."""
+    """
+    Analisa vinculação do Nome Completo (e suas citações abreviadas) a cargos públicos no raio de 300 caracteres.
+    """
     texto_norm = normalizar_texto(texto_bruto)
     nome_norm = normalizar_texto(nome_pesquisado)
 
-    if nome_norm not in texto_norm:
-        return None
+    partes = nome_norm.split()
+    variacoes_nome = [nome_norm]
+    if len(partes) >= 3:
+        variacoes_nome.append(f"{partes[0]} {partes[-1]}")  # ex: gaudencio lucena
+        variacoes_nome.append(f"{partes[0]} {partes[-2]} {partes[-1]}") # ex: gaudencio de lucena
 
     cargos_pep = [
         "senador", "senadora", "deputado", "deputada", "governador", "governadora", 
-        "prefeito", "prefeita", "ministro", "ministra", "desembargador", "desembargadora", 
-        "juiz", "juiza", "juiz federal", "procurador", "procuradora", "secretario", 
-        "secretaria", "vereador", "vereadora", "magistrado", "magistrada", "parlamentar", 
-        "ex ministro", "ex senador", "ex deputado", "ex governador", "ex prefeito", "politico", "politica"
+        "prefeito", "prefeita", "vice prefeito", "vice governadora", "ministro", "ministra", 
+        "desembargador", "desembargadora", "juiz", "juiza", "juiz federal", "procurador", 
+        "procuradora", "secretario", "secretaria", "vereador", "vereadora", "magistrado", 
+        "magistrada", "parlamentar", "ex ministro", "ex senador", "ex deputado", "ex governador", 
+        "ex prefeito", "politico", "politica", "suplente", "candidato", "vice"
     ]
 
-    indices_nome = [m.start() for m in re.finditer(re.escape(nome_norm), texto_norm)]
+    for var_nome in variacoes_nome:
+        if var_nome in texto_norm:
+            indices = [m.start() for m in re.finditer(re.escape(var_nome), texto_norm)]
+            for idx in indices:
+                inicio_janela = max(0, idx - 300)
+                fim_janela = min(len(texto_norm), idx + len(var_nome) + 300)
+                trecho = texto_norm[inicio_janela:fim_janela]
 
-    for idx in indices_nome:
-        inicio_janela = max(0, idx - 250)
-        fim_janela = min(len(texto_norm), idx + len(nome_norm) + 250)
-        trecho = texto_norm[inicio_janela:fim_janela]
-
-        for cargo in cargos_pep:
-            if cargo in trecho:
-                return cargo.title()
+                for cargo in cargos_pep:
+                    if cargo in trecho:
+                        return cargo.title()
 
     return None
 
@@ -592,6 +642,7 @@ elif opcao_menu == "🔍 Consulta PLD/FTP":
                 
                 nome_limpo = nome_input.strip()
                 
+                # 1. PRIMEIRA OPÇÃO: BUSCA NA PLANILHA LOCAL DA CGU
                 match_planilha = buscar_na_planilha_pep(nome_limpo, cpf_input)
                 
                 if match_planilha:
@@ -601,40 +652,19 @@ elif opcao_menu == "🔍 Consulta PLD/FTP":
                     orgao_detectado = match_planilha["orgao"]
                     detalhe_cargo = "Cadastro Ativo na Base Oficial do Governo Federal (CGU)"
                 else:
-                    origem_identificacao = "Pesquisa em Portais Públicos e Notícias Web"
-                    
-                    wiki_text = buscar_wikipedia(nome_limpo)
-                    cargo_wiki = analisar_proximidade_cargo(wiki_text, nome_limpo)
+                    # 2. SEGUNDA OPÇÃO: BUSCA WIKIPÉDIA + VARREDURA WEB ROBUSTA
+                    texto_web_compilado = buscar_web_robusta(nome_limpo)
+                    cargo_web = analisar_proximidade_cargo(texto_web_compilado, nome_limpo)
 
-                    if cargo_wiki:
+                    if cargo_web:
                         detec_pep = True
-                        cargo_detectado = f"Agente Político / Notória Exposição ({cargo_wiki})"
-                        orgao_detectado = "Administração Pública / Registro Histórico (Wikipédia)"
-                        detalhe_cargo = "Histórico Mapeado na Wikipédia Brasil"
+                        cargo_detectado = f"Agente Político / Exposição Pública ({cargo_web})"
+                        orgao_detectado = "Administração Pública / Registro Histórico"
+                        detalhe_cargo = "Histórico Mapeado em Fontes Públicas e Notícias Web"
+                        origem_identificacao = "Pesquisa em Portais Públicos e Notícias Web"
                     else:
-                        res_web = ""
-                        queries_estritas = [
-                            f'"{nome_limpo}" cargo politico',
-                            f'"{nome_limpo}" senador OR deputado OR prefeito OR ministro OR vereador OR juiz'
-                        ]
-                        try:
-                            with DDGS() as ddgs:
-                                for q in queries_estritas:
-                                    results = list(ddgs.text(q, max_results=3))
-                                    for r in results:
-                                        res_web += f"{r.get('title', '')} {r.get('body', '')}\n"
-                        except Exception:
-                            pass
-
-                        cargo_web = analisar_proximidade_cargo(res_web, nome_limpo)
-                        
-                        if cargo_web:
-                            detec_pep = True
-                            cargo_detectado = f"Agente Político / Exposição Pública ({cargo_web})"
-                            orgao_detectado = "Administração Pública"
-                            detalhe_cargo = "Histórico Mapeado em Portais Públicos e Notícias Web"
-                        else:
-                            detec_pep = False
+                        detec_pep = False
+                        origem_identificacao = "Pesquisa em Portais Públicos e Notícias Web"
 
                 SITUACAO_CPF = "VÁLIDO"
                 tz_bsb = timezone(timedelta(hours=-3))
@@ -665,7 +695,7 @@ elif opcao_menu == "🔍 Consulta PLD/FTP":
                     PARECER = "Consulta realizada na base oficial de transparência da CGU e portais públicos. Não foram identificados cargos políticos ativos nem histórico de exposição pública para o Nome e CPF informados."
                     PROXIMA_ATUALIZACAO = (agora_dt + timedelta(days=365)).strftime('%d/%m/%Y')
 
-                # REGISTRA NO NUVEM SUPABASE PERMANENTE
+                # REGISTRA NO SUPABASE
                 registrar_vencimento(
                     nome=nome_input,
                     cpf_raw=cpf_input,
