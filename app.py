@@ -89,19 +89,22 @@ ARQUIVO_USUARIOS = "usuarios_aprovados.csv"
 
 def gerar_hash_senha(senha: str) -> str:
     """Gera hash SHA-256 seguro para armazenamento de senhas."""
-    return hashlib.sha256(senha.encode('utf-8')).hexdigest()
+    if not senha:
+        return ""
+    return hashlib.sha256(senha.strip().encode('utf-8')).hexdigest()
 
 def validar_complexidade_senha(senha: str):
     """Valida se a senha atende aos requisitos mínimos de complexidade corporativa."""
-    if not senha or len(senha) < 8:
+    s = senha.strip() if senha else ""
+    if not s or len(s) < 8:
         return False, "A senha deve conter no mínimo 8 dígitos."
-    if not re.search(r'[A-Z]', senha):
+    if not re.search(r'[A-Z]', s):
         return False, "A senha deve conter pelo menos uma letra MAIÚSCULA."
-    if not re.search(r'[a-z]', senha):
+    if not re.search(r'[a-z]', s):
         return False, "A senha deve conter pelo menos uma letra MINÚSCULA."
-    if not re.search(r'[0-9]', senha):
+    if not re.search(r'[0-9]', s):
         return False, "A senha deve conter pelo menos um NÚMERO."
-    if not re.search(r'[^a-zA-Z0-9]', senha):
+    if not re.search(r'[^a-zA-Z0-9]', s):
         return False, "A senha deve conter pelo menos um CARACTERE ESPECIAL (ex: @, #, $, !, %, *)."
     return True, ""
 
@@ -195,7 +198,7 @@ def buscar_senha_usuario_banco(email: str):
     if engine:
         try:
             with engine.connect() as conn:
-                res = conn.execute(text("SELECT senha_hash, cargo FROM usuarios_auth WHERE LOWER(email) = LOWER(:email) ORDER BY criado_em DESC LIMIT 1"), {"email": email_clean}).fetchone()
+                res = conn.execute(text("SELECT senha_hash, cargo FROM usuarios_auth WHERE LOWER(email) = LOWER(:email)"), {"email": email_clean}).fetchone()
                 if res:
                     return res[0], res[1]
         except Exception:
@@ -754,6 +757,8 @@ if "autenticado" not in st.session_state:
     st.session_state.autenticado = False
 if "email_logado" not in st.session_state:
     st.session_state.email_logado = None
+if "senha_hash_logada" not in st.session_state:
+    st.session_state.senha_hash_logada = None
 if "renovar_nome" not in st.session_state:
     st.session_state.renovar_nome = ""
 if "renovar_cpf" not in st.session_state:
@@ -794,14 +799,16 @@ if not st.session_state.autenticado:
                                 st.success("Senha cadastrada com sucesso! Acessando o sistema...")
                                 st.session_state.autenticado = True
                                 st.session_state.email_logado = email_digitado
+                                st.session_state.senha_hash_logada = gerar_hash_senha(nova_senha)
                                 st.rerun()
                 else:
                     senha_digitada = st.text_input("🔑 Senha de Acesso Individual:", type="password")
                     if st.button("🔓 Entrar no Sistema", use_container_width=True):
                         hash_digitada = gerar_hash_senha(senha_digitada)
-                        if hash_digitada == senha_hash_banco or (SENHA_GERAL and senha_digitada == SENHA_GERAL):
+                        if hash_digitada == senha_hash_banco or (SENHA_GERAL and senha_digitada.strip() == SENHA_GERAL):
                             st.session_state.autenticado = True
                             st.session_state.email_logado = email_digitado
+                            st.session_state.senha_hash_logada = hash_digitada
                             st.rerun()
                         else:
                             st.error("❌ Senha incorreta! Verifique seus dados de acesso.")
@@ -849,10 +856,16 @@ with st.sidebar:
             btn_salvar_senha = st.form_submit_button("💾 Atualizar Senha", use_container_width=True)
             
             if btn_salvar_senha:
-                hash_banco_usr, _ = buscar_senha_usuario_banco(st.session_state.email_logado)
                 hash_atual_input = gerar_hash_senha(senha_atual_in)
+                hash_banco_usr, _ = buscar_senha_usuario_banco(st.session_state.email_logado)
+                hash_sessao = st.session_state.get("senha_hash_logada", "")
                 
-                senha_valida = (hash_banco_usr and hash_atual_input == hash_banco_usr) or (SENHA_GERAL and senha_atual_in == SENHA_GERAL)
+                # Validação tripla: via sessão em memória, via banco Supabase ou via Senha Master
+                senha_valida = (
+                    (hash_sessao and hash_atual_input == hash_sessao) or
+                    (hash_banco_usr and hash_atual_input == hash_banco_usr) or
+                    (SENHA_GERAL and senha_atual_in.strip() == SENHA_GERAL)
+                )
                 valida_comp, msg_comp = validar_complexidade_senha(nova_senha_in)
                 
                 if not senha_valida:
@@ -863,6 +876,7 @@ with st.sidebar:
                     st.error("❌ A confirmação não confere com a nova senha.")
                 else:
                     if cadastrar_senha_usuario_banco(st.session_state.email_logado, nova_senha_in, cargo_usuario_logado):
+                        st.session_state["senha_hash_logada"] = gerar_hash_senha(nova_senha_in)
                         st.session_state["msg_sucesso_senha"] = "✅ Sua senha foi alterada com sucesso!"
                         st.rerun()
         
@@ -903,6 +917,7 @@ with st.sidebar:
     if st.button("🔒 Sair do Sistema", use_container_width=True):
         st.session_state.autenticado = False
         st.session_state.email_logado = None
+        st.session_state.senha_hash_logada = None
         st.session_state.renovar_nome = ""
         st.session_state.renovar_cpf = ""
         st.rerun()
