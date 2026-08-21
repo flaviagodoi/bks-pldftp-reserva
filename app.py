@@ -759,61 +759,91 @@ if "email_logado" not in st.session_state:
     st.session_state.email_logado = None
 if "senha_hash_logada" not in st.session_state:
     st.session_state.senha_hash_logada = None
+if "login_email_confirmado" not in st.session_state:
+    st.session_state.login_email_confirmado = None
 if "renovar_nome" not in st.session_state:
     st.session_state.renovar_nome = ""
 if "renovar_cpf" not in st.session_state:
     st.session_state.renovar_cpf = ""
 
-# --- TELA DE LOGIN E PRIMEIRO ACESSO COM SENHA INDIVIDUAL ---
+# --- TELA DE LOGIN E PRIMEIRO ACESSO COM LOGOS DUPLOS E FLUXO EM 2 ETAPAS ---
 if not st.session_state.autenticado:
     col_l1, col_l2, col_l3 = st.columns([1, 2, 1])
     with col_l2:
-        st.markdown("<br><br>", unsafe_allow_html=True)
-        st.image("logo_bks.png" if os.path.exists("logo_bks.png") else "https://via.placeholder.com/300x80?text=BKS+Compliance", width=260)
+        st.markdown("<br>", unsafe_allow_html=True)
+        col_lg1, col_lg2 = st.columns(2)
+        with col_lg1:
+            if os.path.exists("logo_bks.png"):
+                st.image("logo_bks.png", use_container_width=True)
+            else:
+                st.caption("BKS Corretora")
+        with col_lg2:
+            if os.path.exists("logo_bksre.png"):
+                st.image("logo_bksre.png", use_container_width=True)
+            else:
+                st.caption("BKS Re Resseguros")
+
         st.title("🛡️ Acesso ao Painel PLD/FTP")
         st.caption("Sistema de Conformidade e Prevenção à Lavagem de Dinheiro")
         st.markdown("---")
         
-        email_digitado = st.text_input("📧 E-mail do Operador:", placeholder="seu.nome@bks.com.br").strip().lower()
-        
-        if email_digitado:
-            if not verificar_email_autorizado(email_digitado):
-                st.error("⚠️ **Acesso Negado:** O e-mail informado não possui permissão de acesso. Contate um administrador de compliance.")
-            else:
-                senha_hash_banco, cargo_banco = buscar_senha_usuario_banco(email_digitado)
-                
-                if not senha_hash_banco:
-                    st.info("🆕 **Primeiro Acesso Detectado:** Crie sua senha de acesso individual abaixo.")
-                    nova_senha = st.text_input("🔑 Crie sua Nova Senha:", type="password")
-                    confirma_senha = st.text_input("🔑 Confirme a Nova Senha:", type="password")
-                    
-                    if st.button("✅ Cadastrar Senha e Entrar", use_container_width=True):
-                        valida_comp, msg_comp = validar_complexidade_senha(nova_senha)
-                        if not valida_comp:
-                            st.warning(f"⚠️ {msg_comp}")
-                        elif nova_senha.strip() != confirma_senha.strip():
-                            st.error("As senhas digitadas não conferem. Digite novamente.")
-                        else:
-                            cargo_usr = obter_cargo_usuario(email_digitado)
-                            if cadastrar_senha_usuario_banco(email_digitado, nova_senha, cargo_usr):
-                                st.success("Senha cadastrada com sucesso! Acessando o sistema...")
-                                st.session_state.autenticado = True
-                                st.session_state.email_logado = email_digitado
-                                st.session_state.senha_hash_logada = gerar_hash_senha(nova_senha)
-                                st.rerun()
+        # Etapa 1: Digitar e Validar E-mail
+        if not st.session_state.login_email_confirmado:
+            email_digitado_input = st.text_input("📧 E-mail Institucional do Operador:", placeholder="seu.nome@bks.com.br").strip().lower()
+            
+            if st.button("👉 Continuar", use_container_width=True):
+                if not email_digitado_input:
+                    st.warning("⚠️ Por favor, informe seu e-mail corporativo.")
+                elif not verificar_email_autorizado(email_digitado_input):
+                    st.error("⚠️ **Acesso Negado:** O e-mail informado não possui permissão de acesso. Contate um administrador de compliance.")
                 else:
-                    senha_digitada = st.text_input("🔑 Senha de Acesso Individual:", type="password")
-                    if st.button("🔓 Entrar no Sistema", use_container_width=True):
-                        hash_digitada = gerar_hash_senha(senha_digitada)
-                        if hash_digitada == senha_hash_banco or (SENHA_GERAL and senha_digitada.strip() == SENHA_GERAL):
-                            st.session_state.autenticado = True
-                            st.session_state.email_logado = email_digitado
-                            st.session_state.senha_hash_logada = hash_digitada
-                            st.rerun()
-                        else:
-                            st.error("❌ Senha incorreta! Verifique seus dados de acesso.")
+                    st.session_state.login_email_confirmado = email_digitado_input
+                    st.rerun()
         else:
-            st.caption("💡 *Digite seu e-mail institucional corporativo para habilitar a senha.*")
+            # Etapa 2: Exibir E-mail Confirmado + Campo de Senha
+            email_atual = st.session_state.login_email_confirmado
+            
+            col_usr1, col_usr2 = st.columns([3, 1])
+            with col_usr1:
+                st.markdown(f"👤 **E-mail:** `{email_atual}`")
+            with col_usr2:
+                if st.button("✏️ Alterar"):
+                    st.session_state.login_email_confirmado = None
+                    st.rerun()
+
+            senha_hash_banco, cargo_banco = buscar_senha_usuario_banco(email_atual)
+            
+            if not senha_hash_banco:
+                st.info("🆕 **Primeiro Acesso Detectado:** Crie sua senha individual abaixo.")
+                st.caption("📌 *Requisitos: Mínimo 8 dígitos, contendo maiúscula, minúscula, número e caractere especial.*")
+                nova_senha = st.text_input("🔑 Crie sua Nova Senha:", type="password")
+                confirma_senha = st.text_input("🔑 Confirme a Nova Senha:", type="password")
+                
+                if st.button("✅ Cadastrar Senha e Entrar", use_container_width=True):
+                    valida_comp, msg_comp = validar_complexidade_senha(nova_senha)
+                    if not valida_comp:
+                        st.warning(f"⚠️ {msg_comp}")
+                    elif nova_senha.strip() != confirma_senha.strip():
+                        st.error("❌ As senhas digitadas não conferem. Digite novamente.")
+                    else:
+                        cargo_usr = obter_cargo_usuario(email_atual)
+                        if cadastrar_senha_usuario_banco(email_atual, nova_senha.strip(), cargo_usr):
+                            st.success("✅ Senha cadastrada com sucesso! Entrando no sistema...")
+                            st.session_state.autenticado = True
+                            st.session_state.email_logado = email_atual
+                            st.session_state.senha_hash_logada = gerar_hash_senha(nova_senha.strip())
+                            st.rerun()
+            else:
+                senha_digitada = st.text_input("🔑 Senha de Acesso Individual:", type="password")
+                if st.button("🔓 Entrar no Sistema", use_container_width=True):
+                    hash_digitada = gerar_hash_senha(senha_digitada)
+                    if hash_digitada == senha_hash_banco or (SENHA_GERAL and senha_digitada.strip() == SENHA_GERAL):
+                        st.session_state.autenticado = True
+                        st.session_state.email_logado = email_atual
+                        st.session_state.senha_hash_logada = hash_digitada
+                        st.rerun()
+                    else:
+                        st.error("❌ Senha incorreta! Verifique seus dados de acesso.")
 
     st.stop()
 
@@ -841,45 +871,6 @@ with st.sidebar:
     st.markdown("---")
     
     st.markdown(f"📧 **Operador:** {st.session_state.email_logado}\n\n*(⭐ {cargo_usuario_logado})*")
-    
-    # Notificação de sucesso ao alterar a senha
-    if "msg_sucesso_senha" in st.session_state:
-        st.success(st.session_state.pop("msg_sucesso_senha"))
-
-    # --- MÓDULO RETRÁTIL: ALTERAR MINHA SENHA ---
-    with st.expander("🔑 Alterar Minha Senha", expanded=False):
-        with st.form("form_mudar_senha_limpo"):
-            senha_atual_in = st.text_input("Senha Atual:", type="password")
-            nova_senha_in = st.text_input("Nova Senha:", type="password")
-            conf_senha_in = st.text_input("Confirmar Nova Senha:", type="password")
-            
-            btn_salvar_senha = st.form_submit_button("💾 Atualizar Senha", use_container_width=True)
-            
-            if btn_salvar_senha:
-                hash_atual_input = gerar_hash_senha(senha_atual_in)
-                hash_banco_usr, _ = buscar_senha_usuario_banco(st.session_state.email_logado)
-                hash_sessao = st.session_state.get("senha_hash_logada", "")
-                
-                # Validação tripla: via sessão em memória, via banco Supabase ou via Senha Master
-                senha_valida = (
-                    (hash_sessao and hash_atual_input == hash_sessao) or
-                    (hash_banco_usr and hash_atual_input == hash_banco_usr) or
-                    (SENHA_GERAL and senha_atual_in.strip() == SENHA_GERAL)
-                )
-                valida_comp, msg_comp = validar_complexidade_senha(nova_senha_in)
-                
-                if not senha_valida:
-                    st.error("❌ Senha atual incorreta.")
-                elif not valida_comp:
-                    st.warning(f"⚠️ {msg_comp}")
-                elif nova_senha_in.strip() != conf_senha_in.strip():
-                    st.error("❌ A confirmação não confere com a nova senha.")
-                else:
-                    if cadastrar_senha_usuario_banco(st.session_state.email_logado, nova_senha_in.strip(), cargo_usuario_logado):
-                        st.session_state["senha_hash_logada"] = gerar_hash_senha(nova_senha_in.strip())
-                        st.session_state["msg_sucesso_senha"] = "✅ Sua senha foi alterada com sucesso!"
-                        st.rerun()
-        
     st.markdown("---")
     
     opcoes_menu = [
@@ -918,6 +909,7 @@ with st.sidebar:
         st.session_state.autenticado = False
         st.session_state.email_logado = None
         st.session_state.senha_hash_logada = None
+        st.session_state.login_email_confirmado = None
         st.session_state.renovar_nome = ""
         st.session_state.renovar_cpf = ""
         st.rerun()
@@ -1462,30 +1454,64 @@ elif opcao_menu == "📊 Gestão de Vencimentos":
 # ⚙️ TELA 4: GERENCIADOR DE USUÁRIOS E PERMISSÕES
 # =============================================================================
 elif opcao_menu == "⚙️ Gerenciador de Usuários":
-    st.title("⚙️ Gerenciador de Usuários Aprovados")
-    st.caption("Painel de controle de acessos e permissões dos operadores.")
+    st.title("⚙️ Gerenciador de Usuários e Segurança de Acesso")
+    st.caption("Painel de controle de autorizações, perfis de operador e gestão centralizada de senhas.")
     st.markdown("<br>", unsafe_allow_html=True)
 
+    dict_usuarios = carregar_usuarios()
+
+    # --- ÁREA EXCLUSIVA DE ADMINISTRADOR ---
     if eh_admin:
+        # MÓDULO 1: Autorizar Novo E-mail
+        st.subheader("➕ Autorizar Novo E-mail Corporativo")
         col_add1, col_add2, col_add3 = st.columns([2.5, 1.2, 1])
         with col_add1:
-            novo_email_input = st.text_input("➕ Digite o e-mail para autorizar:", placeholder="novo.usuario@bks.com.br")
+            novo_email_input = st.text_input("E-mail para autorizar:", placeholder="novo.usuario@bks.com.br")
         with col_add2:
             perfil_input = st.selectbox("Cargo / Perfil:", ["Operador", "Administrador", "Gerente", "Diretoria"])
         with col_add3:
             st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("✅ Autorizar", use_container_width=True):
+            if st.button("✅ Autorizar Acesso", use_container_width=True):
                 sucesso, msg = adicionar_novo_usuario(novo_email_input, perfil_input)
                 if sucesso:
                     st.success(msg)
                     st.rerun()
                 else:
                     st.warning(msg)
+        
         st.markdown("---")
 
-    st.subheader("📋 Lista de Usuários com Acesso Liberado")
+        # MÓDULO 2: Redefinição Centralizada de Senha por ADM
+        st.subheader("🔑 Gestão e Redefinição de Senhas (ADM)")
+        st.caption("Altere a senha de qualquer operador registrado. A nova senha deve cumprir os requisitos corporativos de segurança.")
+        
+        lista_emails_autorizados = sorted(list(dict_usuarios.keys()))
+        
+        col_reset1, col_reset2, col_reset3 = st.columns([2, 1.5, 1.5])
+        with col_reset1:
+            email_alvo_reset = st.selectbox("Selecione o E-mail do Usuário:", lista_emails_autorizados)
+        with col_reset2:
+            nova_senha_adm = st.text_input("Nova Senha Corporativa:", type="password", key="input_senha_adm_nova")
+        with col_reset3:
+            confirma_senha_adm = st.text_input("Confirmar Nova Senha:", type="password", key="input_senha_adm_conf")
+            
+        if st.button("💾 Redefinir Senha do Usuário", use_container_width=True):
+            valida_comp, msg_comp = validar_complexidade_senha(nova_senha_adm)
+            if not nova_senha_adm:
+                st.warning("⚠️ Digite a nova senha antes de salvar.")
+            elif not valida_comp:
+                st.warning(f"⚠️ {msg_comp}")
+            elif nova_senha_adm.strip() != confirma_senha_adm.strip():
+                st.error("❌ As senhas digitadas não conferem. Digite novamente.")
+            else:
+                cargo_alvo = dict_usuarios.get(email_alvo_reset, "Operador")
+                if cadastrar_senha_usuario_banco(email_alvo_reset, nova_senha_adm.strip(), cargo_alvo):
+                    st.success(f"✅ Senha do usuário **{email_alvo_reset}** redefinida com sucesso pelo Administrador!")
+        
+        st.markdown("---")
 
-    dict_usuarios = carregar_usuarios()
+    # MÓDULO 3: Tabela Geral de Usuários Cadastrados
+    st.subheader("📋 Lista de Usuários com Acesso Liberado")
 
     if not dict_usuarios:
         st.info("Nenhum usuário cadastrado.")
