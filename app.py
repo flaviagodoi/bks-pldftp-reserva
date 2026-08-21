@@ -791,7 +791,7 @@ if not st.session_state.autenticado:
                         valida_comp, msg_comp = validar_complexidade_senha(nova_senha)
                         if not valida_comp:
                             st.warning(f"⚠️ {msg_comp}")
-                        elif nova_senha != confirma_senha:
+                        elif nova_senha.strip() != confirma_senha.strip():
                             st.error("As senhas digitadas não conferem. Digite novamente.")
                         else:
                             cargo_usr = obter_cargo_usuario(email_digitado)
@@ -848,7 +848,7 @@ with st.sidebar:
 
     # --- MÓDULO RETRÁTIL: ALTERAR MINHA SENHA ---
     with st.expander("🔑 Alterar Minha Senha", expanded=False):
-        with st.form("form_mudar_senha_limpo", clear_on_submit=True):
+        with st.form("form_mudar_senha_limpo"):
             senha_atual_in = st.text_input("Senha Atual:", type="password")
             nova_senha_in = st.text_input("Nova Senha:", type="password")
             conf_senha_in = st.text_input("Confirmar Nova Senha:", type="password")
@@ -872,11 +872,11 @@ with st.sidebar:
                     st.error("❌ Senha atual incorreta.")
                 elif not valida_comp:
                     st.warning(f"⚠️ {msg_comp}")
-                elif nova_senha_in != conf_senha_in:
+                elif nova_senha_in.strip() != conf_senha_in.strip():
                     st.error("❌ A confirmação não confere com a nova senha.")
                 else:
-                    if cadastrar_senha_usuario_banco(st.session_state.email_logado, nova_senha_in, cargo_usuario_logado):
-                        st.session_state["senha_hash_logada"] = gerar_hash_senha(nova_senha_in)
+                    if cadastrar_senha_usuario_banco(st.session_state.email_logado, nova_senha_in.strip(), cargo_usuario_logado):
+                        st.session_state["senha_hash_logada"] = gerar_hash_senha(nova_senha_in.strip())
                         st.session_state["msg_sucesso_senha"] = "✅ Sua senha foi alterada com sucesso!"
                         st.rerun()
         
