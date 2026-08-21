@@ -190,11 +190,12 @@ def buscar_senha_usuario_banco(email: str):
     """Retorna o hash da senha e o cargo gravado no Supabase para o e-mail informado."""
     if not email:
         return None, None
+    email_clean = email.strip().lower()
     engine = obter_conexao_banco()
     if engine:
         try:
             with engine.connect() as conn:
-                res = conn.execute(text("SELECT senha_hash, cargo FROM usuarios_auth WHERE LOWER(email) = LOWER(:email)"), {"email": email.strip().lower()}).fetchone()
+                res = conn.execute(text("SELECT senha_hash, cargo FROM usuarios_auth WHERE LOWER(email) = LOWER(:email) ORDER BY criado_em DESC LIMIT 1"), {"email": email_clean}).fetchone()
                 if res:
                     return res[0], res[1]
         except Exception:
@@ -202,7 +203,7 @@ def buscar_senha_usuario_banco(email: str):
     return None, None
 
 def cadastrar_senha_usuario_banco(email: str, senha_plana: str, cargo: str):
-    """Grava a senha individual criptografada no Supabase."""
+    """Grava a senha individual criptografada no Supabase eliminando duplicidades."""
     senha_h = gerar_hash_senha(senha_plana)
     criado_em = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     email_clean = email.strip().lower()
@@ -210,12 +211,10 @@ def cadastrar_senha_usuario_banco(email: str, senha_plana: str, cargo: str):
     if engine:
         try:
             with engine.connect() as conn:
+                conn.execute(text("DELETE FROM usuarios_auth WHERE LOWER(email) = LOWER(:email)"), {"email": email_clean})
                 conn.execute(text('''
                     INSERT INTO usuarios_auth (email, senha_hash, cargo, criado_em)
-                    VALUES (:email, :senha_hash, :cargo, :criado_em)
-                    ON CONFLICT (email) DO UPDATE SET
-                        senha_hash = EXCLUDED.senha_hash,
-                        cargo = EXCLUDED.cargo;
+                    VALUES (:email, :senha_hash, :cargo, :criado_em);
                 '''), {"email": email_clean, "senha_hash": senha_h, "cargo": cargo, "criado_em": criado_em})
                 conn.commit()
                 return True
@@ -842,30 +841,30 @@ with st.sidebar:
 
     # --- MÓDULO RETRÁTIL: ALTERAR MINHA SENHA ---
     with st.expander("🔑 Alterar Minha Senha", expanded=False):
-        senha_atual_in = st.text_input("Senha Atual:", type="password", key="mudar_senha_atual")
-        nova_senha_in = st.text_input("Nova Senha:", type="password", key="mudar_senha_nova")
-        conf_senha_in = st.text_input("Confirmar Nova Senha:", type="password", key="mudar_senha_conf")
-        
-        if st.button("💾 Atualizar Senha", use_container_width=True, key="btn_salvar_nova_senha"):
-            hash_banco_usr, _ = buscar_senha_usuario_banco(st.session_state.email_logado)
-            hash_atual_input = gerar_hash_senha(senha_atual_in)
+        with st.form("form_mudar_senha_limpo", clear_on_submit=True):
+            senha_atual_in = st.text_input("Senha Atual:", type="password")
+            nova_senha_in = st.text_input("Nova Senha:", type="password")
+            conf_senha_in = st.text_input("Confirmar Nova Senha:", type="password")
             
-            senha_valida = (hash_banco_usr and hash_atual_input == hash_banco_usr) or (SENHA_GERAL and senha_atual_in == SENHA_GERAL)
-            valida_comp, msg_comp = validar_complexidade_senha(nova_senha_in)
+            btn_salvar_senha = st.form_submit_button("💾 Atualizar Senha", use_container_width=True)
             
-            if not senha_valida:
-                st.error("❌ Senha atual incorreta.")
-            elif not valida_comp:
-                st.warning(f"⚠️ {msg_comp}")
-            elif nova_senha_in != conf_senha_in:
-                st.error("❌ A confirmação não confere com a nova senha.")
-            else:
-                if cadastrar_senha_usuario_banco(st.session_state.email_logado, nova_senha_in, cargo_usuario_logado):
-                    st.session_state["msg_sucesso_senha"] = "✅ Sua senha foi alterada com sucesso!"
-                    st.session_state["mudar_senha_atual"] = ""
-                    st.session_state["mudar_senha_nova"] = ""
-                    st.session_state["mudar_senha_conf"] = ""
-                    st.rerun()
+            if btn_salvar_senha:
+                hash_banco_usr, _ = buscar_senha_usuario_banco(st.session_state.email_logado)
+                hash_atual_input = gerar_hash_senha(senha_atual_in)
+                
+                senha_valida = (hash_banco_usr and hash_atual_input == hash_banco_usr) or (SENHA_GERAL and senha_atual_in == SENHA_GERAL)
+                valida_comp, msg_comp = validar_complexidade_senha(nova_senha_in)
+                
+                if not senha_valida:
+                    st.error("❌ Senha atual incorreta.")
+                elif not valida_comp:
+                    st.warning(f"⚠️ {msg_comp}")
+                elif nova_senha_in != conf_senha_in:
+                    st.error("❌ A confirmação não confere com a nova senha.")
+                else:
+                    if cadastrar_senha_usuario_banco(st.session_state.email_logado, nova_senha_in, cargo_usuario_logado):
+                        st.session_state["msg_sucesso_senha"] = "✅ Sua senha foi alterada com sucesso!"
+                        st.rerun()
         
     st.markdown("---")
     
