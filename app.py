@@ -1,5 +1,5 @@
 import streamlit as st
-import io, os, re, unicodedata, requests, csv, hashlib
+import io, os, re, unicodedata, requests, csv, hashlib, base64
 from datetime import datetime, timezone, timedelta
 from PIL import Image as PILImage
 from duckduckgo_search import DDGS
@@ -17,6 +17,16 @@ from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 # 🔐 BLINDAGEM DE CHAVES E SENHAS VIA STREAMLIT SECRETS (SEM SENHA EXPOSTA NO CODE)
 # -----------------------------------------------------------------------------
 SENHA_GERAL = st.secrets.get("SENHA_GERAL", "")
+
+def obter_base64_imagem(caminho_imagem):
+    """Converte arquivo de imagem local para Base64 permitindo alinhamento CSS fluido."""
+    if caminho_imagem and os.path.exists(caminho_imagem):
+        try:
+            with open(caminho_imagem, "rb") as f:
+                return base64.b64encode(f.read()).decode("utf-8")
+        except Exception:
+            pass
+    return None
 
 # -----------------------------------------------------------------------------
 # 🗄️ CONEXÃO NATIVA E PERMANENTE COM BANCO SUPABASE (POSTGRESQL)
@@ -766,22 +776,24 @@ if "renovar_nome" not in st.session_state:
 if "renovar_cpf" not in st.session_state:
     st.session_state.renovar_cpf = ""
 
-# --- TELA DE LOGIN E PRIMEIRO ACESSO COM LOGOS DUPLOS E FLUXO EM 2 ETAPAS ---
+# --- TELA DE LOGIN E PRIMEIRO ACESSO COM LOGOS Nivelados ÀS EXTREMIDADES ---
 if not st.session_state.autenticado:
     col_l1, col_l2, col_l3 = st.columns([1, 2, 1])
     with col_l2:
         st.markdown("<br>", unsafe_allow_html=True)
-        col_lg1, col_lg2 = st.columns(2)
-        with col_lg1:
-            if os.path.exists("logo_bks.png"):
-                st.image("logo_bks.png", use_container_width=True)
-            else:
-                st.caption("BKS Corretora")
-        with col_lg2:
-            if os.path.exists("logo_bksre.png"):
-                st.image("logo_bksre.png", use_container_width=True)
-            else:
-                st.caption("BKS Re Resseguros")
+        
+        bks_b64 = obter_base64_imagem("logo_bks.png")
+        bksre_b64 = obter_base64_imagem("logo_bksre.png")
+        
+        img_bks_html = f'<img src="data:image/png;base64,{bks_b64}" style="height: 75px; max-width: 220px; object-fit: contain;">' if bks_b64 else '<span style="font-weight:bold; font-size:16px; color:#0056b3;">BKS CORRETORA</span>'
+        img_bksre_html = f'<img src="data:image/png;base64,{bksre_b64}" style="height: 75px; max-width: 220px; object-fit: contain;">' if bksre_b64 else '<span style="font-weight:bold; font-size:16px; color:#0056b3;">BKS RE RESSEGUROS</span>'
+        
+        st.markdown(f'''
+            <div style="display: flex; justify-content: space-between; align-items: center; width: 100%; margin-bottom: 20px;">
+                <div style="text-align: left;">{img_bks_html}</div>
+                <div style="text-align: right;">{img_bksre_html}</div>
+            </div>
+        ''', unsafe_allow_html=True)
 
         st.title("🛡️ Acesso ao Painel PLD/FTP")
         st.caption("Sistema de Conformidade e Prevenção à Lavagem de Dinheiro")
@@ -800,12 +812,12 @@ if not st.session_state.autenticado:
                     st.session_state.login_email_confirmado = email_digitado_input
                     st.rerun()
         else:
-            # Etapa 2: Exibir E-mail Confirmado + Campo de Senha
+            # Etapa 2: Exibir E-mail Confirmado em Fonte Normal + Campo de Senha
             email_atual = st.session_state.login_email_confirmado
             
             col_usr1, col_usr2 = st.columns([3, 1])
             with col_usr1:
-                st.markdown(f"👤 **E-mail:** `{email_atual}`")
+                st.markdown(f"📧 **E-mail informado:** {email_atual}")
             with col_usr2:
                 if st.button("✏️ Alterar"):
                     st.session_state.login_email_confirmado = None
@@ -871,6 +883,48 @@ with st.sidebar:
     st.markdown("---")
     
     st.markdown(f"📧 **Operador:** {st.session_state.email_logado}\n\n*(⭐ {cargo_usuario_logado})*")
+    
+    # Notificação de sucesso ao alterar a senha própria
+    if "msg_sucesso_senha_propria" in st.session_state:
+        st.success(st.session_state.pop("msg_sucesso_senha_propria"))
+
+    # --- MÓDULO RETRÁTIL: ALTERAR MINHA PRÓPRIA SENHA (QUALQUER USUÁRIO) ---
+    with st.expander("🔑 Alterar Minha Senha", expanded=False):
+        senha_atual_propria = st.text_input("Sua Senha Atual:", type="password", key="input_senha_atual_p")
+        nova_senha_propria = st.text_input("Nova Senha:", type="password", key="input_nova_senha_p")
+        conf_senha_propria = st.text_input("Confirmar Nova Senha:", type="password", key="input_conf_senha_p")
+        
+        if st.button("💾 Salvar Nova Senha", use_container_width=True, key="btn_salvar_senha_propria"):
+            hash_atual_in = gerar_hash_senha(senha_atual_propria)
+            hash_banco_usr, _ = buscar_senha_usuario_banco(st.session_state.email_logado)
+            hash_sessao = st.session_state.get("senha_hash_logada", "")
+            
+            senha_ok = (
+                (hash_sessao and hash_atual_in == hash_sessao) or
+                (hash_banco_usr and hash_atual_in == hash_banco_usr) or
+                (SENHA_GERAL and senha_atual_propria.strip() == SENHA_GERAL)
+            )
+            valida_comp, msg_comp = validar_complexidade_senha(nova_senha_propria)
+            
+            if not senha_atual_propria.strip():
+                st.warning("⚠️ Digite sua senha atual para continuar.")
+            elif not senha_ok:
+                st.error("❌ Sua senha atual está incorreta.")
+            elif not nova_senha_propria.strip():
+                st.warning("⚠️ Digite a nova senha antes de salvar.")
+            elif not valida_comp:
+                st.warning(f"⚠️ {msg_comp}")
+            elif nova_senha_propria.strip() != conf_senha_propria.strip():
+                st.error("❌ A confirmação não confere com a nova senha.")
+            else:
+                if cadastrar_senha_usuario_banco(st.session_state.email_logado, nova_senha_propria.strip(), cargo_usuario_logado):
+                    st.session_state["senha_hash_logada"] = gerar_hash_senha(nova_senha_propria.strip())
+                    st.session_state["msg_sucesso_senha_propria"] = "✅ Sua senha foi alterada com sucesso!"
+                    for k in ["input_senha_atual_p", "input_nova_senha_p", "input_conf_senha_p"]:
+                        if k in st.session_state:
+                            del st.session_state[k]
+                    st.rerun()
+
     st.markdown("---")
     
     opcoes_menu = [
@@ -1483,21 +1537,40 @@ elif opcao_menu == "⚙️ Gerenciador de Usuários":
 
         # MÓDULO 2: Redefinição Centralizada de Senha por ADM
         st.subheader("🔑 Gestão e Redefinição de Senhas (ADM)")
-        st.caption("Altere a senha de qualquer operador registrado. A nova senha deve cumprir os requisitos corporativos de segurança.")
+        st.caption("Altere a senha de qualquer operador registrado. É necessário informar a sua senha atual de Administrador para autorizar.")
         
+        # Exibe notificação de sucesso ao redefinir a senha via ADM
+        if "msg_sucesso_senha_adm" in st.session_state:
+            st.success(st.session_state.pop("msg_sucesso_senha_adm"))
+
         lista_emails_autorizados = sorted(list(dict_usuarios.keys()))
         
-        col_reset1, col_reset2, col_reset3 = st.columns([2, 1.5, 1.5])
+        col_reset1, col_reset2 = st.columns(2)
         with col_reset1:
-            email_alvo_reset = st.selectbox("Selecione o E-mail do Usuário:", lista_emails_autorizados)
+            email_alvo_reset = st.selectbox("Selecione o E-mail do Usuário:", lista_emails_autorizados, key="sel_email_alvo_adm")
+            senha_atual_adm = st.text_input("Sua Senha Atual (ADM Executor):", type="password", key="input_senha_adm_atual")
         with col_reset2:
             nova_senha_adm = st.text_input("Nova Senha Corporativa:", type="password", key="input_senha_adm_nova")
-        with col_reset3:
             confirma_senha_adm = st.text_input("Confirmar Nova Senha:", type="password", key="input_senha_adm_conf")
             
-        if st.button("💾 Redefinir Senha do Usuário", use_container_width=True):
+        if st.button("💾 Redefinir Senha", use_container_width=True, key="btn_redefinir_senha_adm"):
+            hash_atual = gerar_hash_senha(senha_atual_adm)
+            hash_banco_executor, _ = buscar_senha_usuario_banco(st.session_state.email_logado)
+            hash_sessao = st.session_state.get("senha_hash_logada", "")
+            
+            senha_atual_ok = (
+                (hash_sessao and hash_atual == hash_sessao) or
+                (hash_banco_executor and hash_atual == hash_banco_executor) or
+                (SENHA_GERAL and senha_atual_adm.strip() == SENHA_GERAL)
+            )
+            
             valida_comp, msg_comp = validar_complexidade_senha(nova_senha_adm)
-            if not nova_senha_adm:
+            
+            if not senha_atual_adm.strip():
+                st.warning("⚠️ Digite sua senha de Administrador para autorizar a alteração.")
+            elif not senha_atual_ok:
+                st.error("❌ Senha do Administrador incorreta.")
+            elif not nova_senha_adm.strip():
                 st.warning("⚠️ Digite a nova senha antes de salvar.")
             elif not valida_comp:
                 st.warning(f"⚠️ {msg_comp}")
@@ -1506,7 +1579,11 @@ elif opcao_menu == "⚙️ Gerenciador de Usuários":
             else:
                 cargo_alvo = dict_usuarios.get(email_alvo_reset, "Operador")
                 if cadastrar_senha_usuario_banco(email_alvo_reset, nova_senha_adm.strip(), cargo_alvo):
-                    st.success(f"✅ Senha do usuário **{email_alvo_reset}** redefinida com sucesso pelo Administrador!")
+                    st.session_state["msg_sucesso_senha_adm"] = f"✅ Senha do usuário **{email_alvo_reset}** redefinida com sucesso pelo Administrador!"
+                    for k in ["input_senha_adm_atual", "input_senha_adm_nova", "input_senha_adm_conf"]:
+                        if k in st.session_state:
+                            del st.session_state[k]
+                    st.rerun()
         
         st.markdown("---")
 
