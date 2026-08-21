@@ -170,7 +170,7 @@ def remover_usuario(email_remover):
         if engine:
             try:
                 with engine.connect() as conn:
-                    conn.execute(text("DELETE FROM usuarios_auth WHERE email = :email"), {"email": email_clean})
+                    conn.execute(text("DELETE FROM usuarios_auth WHERE LOWER(email) = LOWER(:email)"), {"email": email_clean})
                     conn.commit()
             except Exception:
                 pass
@@ -188,11 +188,13 @@ def verificar_email_autorizado(email: str) -> bool:
 
 def buscar_senha_usuario_banco(email: str):
     """Retorna o hash da senha e o cargo gravado no Supabase para o e-mail informado."""
+    if not email:
+        return None, None
     engine = obter_conexao_banco()
     if engine:
         try:
             with engine.connect() as conn:
-                res = conn.execute(text("SELECT senha_hash, cargo FROM usuarios_auth WHERE email = :email"), {"email": email.strip().lower()}).fetchone()
+                res = conn.execute(text("SELECT senha_hash, cargo FROM usuarios_auth WHERE LOWER(email) = LOWER(:email)"), {"email": email.strip().lower()}).fetchone()
                 if res:
                     return res[0], res[1]
         except Exception:
@@ -203,6 +205,7 @@ def cadastrar_senha_usuario_banco(email: str, senha_plana: str, cargo: str):
     """Grava a senha individual criptografada no Supabase."""
     senha_h = gerar_hash_senha(senha_plana)
     criado_em = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    email_clean = email.strip().lower()
     engine = obter_conexao_banco()
     if engine:
         try:
@@ -213,7 +216,7 @@ def cadastrar_senha_usuario_banco(email: str, senha_plana: str, cargo: str):
                     ON CONFLICT (email) DO UPDATE SET
                         senha_hash = EXCLUDED.senha_hash,
                         cargo = EXCLUDED.cargo;
-                '''), {"email": email.strip().lower(), "senha_hash": senha_h, "cargo": cargo, "criado_em": criado_em})
+                '''), {"email": email_clean, "senha_hash": senha_h, "cargo": cargo, "criado_em": criado_em})
                 conn.commit()
                 return True
         except Exception:
@@ -833,8 +836,12 @@ with st.sidebar:
     
     st.markdown(f"📧 **Operador:** {st.session_state.email_logado}\n\n*(⭐ {cargo_usuario_logado})*")
     
+    # Notificação de sucesso ao alterar a senha
+    if "msg_sucesso_senha" in st.session_state:
+        st.success(st.session_state.pop("msg_sucesso_senha"))
+
     # --- MÓDULO RETRÁTIL: ALTERAR MINHA SENHA ---
-    with st.expander("🔑 Alterar Minha Senha"):
+    with st.expander("🔑 Alterar Minha Senha", expanded=False):
         senha_atual_in = st.text_input("Senha Atual:", type="password", key="mudar_senha_atual")
         nova_senha_in = st.text_input("Nova Senha:", type="password", key="mudar_senha_nova")
         conf_senha_in = st.text_input("Confirmar Nova Senha:", type="password", key="mudar_senha_conf")
@@ -854,7 +861,11 @@ with st.sidebar:
                 st.error("❌ A confirmação não confere com a nova senha.")
             else:
                 if cadastrar_senha_usuario_banco(st.session_state.email_logado, nova_senha_in, cargo_usuario_logado):
-                    st.success("✅ Sua senha foi alterada com sucesso!")
+                    st.session_state["msg_sucesso_senha"] = "✅ Sua senha foi alterada com sucesso!"
+                    st.session_state["mudar_senha_atual"] = ""
+                    st.session_state["mudar_senha_nova"] = ""
+                    st.session_state["mudar_senha_conf"] = ""
+                    st.rerun()
         
     st.markdown("---")
     
